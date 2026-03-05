@@ -1,0 +1,11 @@
+fastapi==0.115.5
+uvicorn==0.32.1
+langchain==0.3.7
+langchain-openai==0.2.8
+langchain-anthropic==0.3.3
+langchain-community==0.3.7
+langgraph==0.2.45
+pydantic==2.10.3
+yfinance==0.2.49
+python-dotenv==1.0.1
+requests==2.32.3

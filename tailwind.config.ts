@@ -57,6 +57,18 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        bull: {
+          DEFAULT: "hsl(var(--bull))",
+          foreground: "hsl(var(--bull-foreground))",
+        },
+        bear: {
+          DEFAULT: "hsl(var(--bear))",
+          foreground: "hsl(var(--bear-foreground))",
+        },
+        strategist: {
+          DEFAULT: "hsl(var(--strategist))",
+          foreground: "hsl(var(--strategist-foreground))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

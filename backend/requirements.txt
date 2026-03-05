@@ -9,3 +9,8 @@ pydantic==2.10.3
 yfinance==0.2.49
 python-dotenv==1.0.1
 requests==2.32.3
+
+# RAG dependencies
+chromadb>=0.6.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0

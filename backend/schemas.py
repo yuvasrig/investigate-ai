@@ -122,5 +122,6 @@ class AnalysisResponse(BaseModel):
     strategist_analysis: StrategistAnalysis
     final_recommendation: JudgeRecommendation
     market_data: Optional[dict] = None
+    rag_summary: Optional[dict] = None   # {"sec": N, "news": M, "cache_hit": bool}
     execution_time: float
     timestamp: str

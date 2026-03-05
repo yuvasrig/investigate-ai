@@ -88,6 +88,7 @@ def analyze(request: AnalysisRequest):
         strategist_analysis=result["strategist_analysis"],
         final_recommendation=result["final_recommendation"],
         market_data=result.get("market_data"),
+        rag_summary=result.get("rag_summary"),
         execution_time=elapsed,
         timestamp=timestamp,
     )

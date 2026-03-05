@@ -1,104 +1,127 @@
 """
-Four investment agents — all grounded with live market data.
+Four investment agents — grounded with live market data AND RAG document context.
 
-Every agent receives a formatted market-data block BEFORE being asked to reason,
-so price targets, PE ratios, and financials are anchored to real numbers rather
-than the model's (potentially stale) training data.
+Every agent receives two injected blocks before being asked to reason:
+  1. GROUNDING — live yfinance snapshot (price, PE, margins, consensus, news headlines)
+  2. RAG       — relevant excerpts from SEC 10-K/10-Q filings and full news articles
+
+This combination ensures:
+  - Numbers are anchored to real current data (grounding)
+  - Reasoning is backed by actual disclosed risks and management commentary (RAG)
 """
 
 from schemas import BullAnalysis, BearAnalysis, StrategistAnalysis, JudgeRecommendation
 from llm_factory import get_analyst_llm, get_judge_llm
 from tools import format_market_context
 
+# Shown in the prompt when no RAG documents were retrieved
+_NO_RAG = "[No additional documents available — rely on the market data above.]"
+
 
 # ── Bull Analyst ─────────────────────────────────────────────────────────────
 
 BULL_SYSTEM = """You are a BULL ANALYST for {ticker}.
 
-You have been given VERIFIED LIVE market data below. You MUST:
-- Use the exact current price shown as your baseline
-- Base your best-case price target on the real current price (e.g. "+80% in 3 years")
-- Reference actual revenue figures, margins, and growth rates from the data
-- Do NOT invent or hallucinate numbers — every metric you cite must come from the data below or be clearly labeled as your reasoned estimate
+You have two verified data sources below. USE THEM. Do NOT rely on training-data
+guesses for prices, PE ratios, revenue figures, or growth rates.
 
+━━━ SOURCE 1 — LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {market_context}
 
-Given this real data, construct the STRONGEST possible bull case for investing in {ticker} now.
+━━━ SOURCE 2 — SEC FILINGS & NEWS (RAG) ━━━━━━━━━━━━━━━━━━━━
+{rag_context}
+
+Using the data above, build the STRONGEST possible bull case for investing in {ticker} NOW.
 
 Focus on:
-1. Competitive advantages that the data supports (high margins, revenue growth, market position)
-2. Growth catalysts visible in the financials (revenue acceleration, margin expansion, FCF growth)
-3. Valuation justification — is the current P/E warranted by growth rate? Use the PEG ratio
-4. A specific best-case price target derived from the current price above and a realistic timeline
+1. Competitive advantages supported by the financials (high/expanding margins, FCF growth,
+   market-share evidence from the SEC filings or news)
+2. Growth catalysts visible in the data (revenue acceleration, new markets, product pipeline
+   mentioned in the 10-K Business section or recent news)
+3. Valuation justification — is the current P/E warranted by the PEG ratio and growth rate?
+4. A specific best-case price target derived from the REAL current price shown above,
+   with a credible timeline and upside percentage
 
-Be precise. Reference actual numbers from the data. Output only valid JSON matching the BullAnalysis schema."""
+Cite actual numbers. Reference SEC section or news source when you use document content.
+Output only valid JSON matching the BullAnalysis schema."""
 
 
-def run_bull_agent(ticker: str, market_data: dict) -> BullAnalysis:
+def run_bull_agent(ticker: str, market_data: dict, rag_context: str = "") -> BullAnalysis:
     llm = get_analyst_llm().with_structured_output(BullAnalysis)
-    market_context = format_market_context(market_data)
-    return llm.invoke(BULL_SYSTEM.format(ticker=ticker, market_context=market_context))
+    return llm.invoke(BULL_SYSTEM.format(
+        ticker=ticker,
+        market_context=format_market_context(market_data),
+        rag_context=rag_context or _NO_RAG,
+    ))
 
 
 # ── Bear Analyst ─────────────────────────────────────────────────────────────
 
 BEAR_SYSTEM = """You are a BEAR ANALYST for {ticker}.
 
-You have been given VERIFIED LIVE market data below. You MUST:
-- Use the exact current price shown as your baseline
-- Base your worst-case price target on the real current price (e.g. "-60% over 2 years")
-- Reference actual valuation multiples, debt levels, and margin trends from the data
-- Do NOT invent or hallucinate numbers — every metric you cite must come from the data below or be clearly labeled as your reasoned estimate
+You have two verified data sources below. USE THEM. Do NOT rely on training-data
+guesses for prices, PE ratios, revenue figures, or growth rates.
 
+━━━ SOURCE 1 — LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {market_context}
 
-Given this real data, construct the STRONGEST possible bear case AGAINST investing in {ticker} now.
+━━━ SOURCE 2 — SEC FILINGS & NEWS (RAG) ━━━━━━━━━━━━━━━━━━━━
+{rag_context}
+
+Using the data above, build the STRONGEST possible bear case AGAINST investing in {ticker} NOW.
 
 Focus on:
-1. Valuation risks — how does the current P/E compare to growth rate? Is the PEG ratio justified?
-2. Competition threats — what do the margins or slowing growth reveal about competitive pressure?
-3. Financial risks — debt levels, FCF sustainability, short interest signals
-4. A specific worst-case price target derived from the current price above and a realistic timeline
+1. Valuation risk — is the current P/E and PEG ratio justified? Compare to revenue growth rate
+2. Competitive threats — look for customer concentration, competitor mentions,
+   or market-share risk in the 10-K Risk Factors section
+3. Financial concerns — debt levels, FCF sustainability, high short interest signals
+4. Macro/cyclical risks disclosed in the SEC filings (regulatory, geopolitical, supply chain)
+5. A specific worst-case price target derived from the REAL current price shown above,
+   with a credible timeline and downside percentage
 
-Be skeptical. Stress-test every bullish assumption. Reference actual numbers from the data.
+Be skeptical. Stress-test every bullish assumption. Use the disclosed risk factors from the
+SEC filings as your primary ammunition — they are legally binding disclosures.
 Output only valid JSON matching the BearAnalysis schema."""
 
 
-def run_bear_agent(ticker: str, market_data: dict) -> BearAnalysis:
+def run_bear_agent(ticker: str, market_data: dict, rag_context: str = "") -> BearAnalysis:
     llm = get_analyst_llm().with_structured_output(BearAnalysis)
-    market_context = format_market_context(market_data)
-    return llm.invoke(BEAR_SYSTEM.format(ticker=ticker, market_context=market_context))
+    return llm.invoke(BEAR_SYSTEM.format(
+        ticker=ticker,
+        market_context=format_market_context(market_data),
+        rag_context=rag_context or _NO_RAG,
+    ))
 
 
 # ── Portfolio Strategist ──────────────────────────────────────────────────────
 
 STRATEGIST_SYSTEM = """You are a PORTFOLIO STRATEGIST evaluating a position in {ticker}.
 
-You have been given VERIFIED LIVE market data below. You MUST:
-- Use the real current price to calculate exact share counts
-- Use the real market cap and beta to assess volatility-adjusted position sizing
-- Reference analyst consensus targets when setting realistic allocation bounds
-- Do NOT invent or hallucinate numbers
+You have two verified data sources below. USE THEM.
 
+━━━ SOURCE 1 — LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {market_context}
 
-User portfolio context:
-- Proposed investment amount: ${amount:,.0f}
-- Total portfolio value:      ${portfolio_value:,.0f}
-- Proposed allocation pct:   {proposed_pct:.1f}% of portfolio
-- Risk tolerance:             {risk_tolerance}
+━━━ SOURCE 2 — SEC FILINGS & NEWS (RAG) ━━━━━━━━━━━━━━━━━━━━
+{rag_context}
 
-Position sizing guidelines:
-- Single stock should not exceed 5-10% of portfolio for moderate risk
-- High-beta stocks (beta > 1.5) warrant tighter sizing
-- High short interest (> 10%) signals elevated volatility risk
-- Factor in analyst consensus — if mean target < current price, flag this
+USER PORTFOLIO CONTEXT:
+  Proposed investment:   ${amount:,.0f}
+  Total portfolio value: ${portfolio_value:,.0f}
+  Proposed allocation:   {proposed_pct:.1f}% of portfolio
+  Risk tolerance:        {risk_tolerance}
 
-Calculate:
-1. Current indirect exposure via broad index funds (S&P 500 / Nasdaq ETFs)
-2. Concentration risk rating (LOW / MODERATE / HIGH) with explanation
-3. Recommended allocation — may differ from the user's proposed amount if risk warrants it
-4. Entry strategy advice given current valuation vs analyst targets
+Using ALL sources above, determine the RIGHT position size:
+
+1. Current indirect exposure — estimate via S&P 500 / Nasdaq index fund holdings
+   (use the sector and market cap from the data above to calibrate)
+2. Concentration risk (LOW / MODERATE / HIGH):
+   - HIGH beta (>1.5) or high short interest (>10%) = tighter sizing
+   - Analyst mean target below current price = flag explicitly
+   - Customer concentration in SEC filings = raise risk rating
+3. Recommended allocation — may differ from the proposed amount if risk warrants it.
+   Provide the exact dollar figure and the reasoning behind any reduction.
+4. Alternative options that could provide similar exposure with less concentration risk
 
 Output only valid JSON matching the StrategistAnalysis schema."""
 
@@ -109,53 +132,59 @@ def run_strategist_agent(
     portfolio_value: float,
     risk_tolerance: str,
     market_data: dict,
+    rag_context: str = "",
 ) -> StrategistAnalysis:
     llm = get_analyst_llm().with_structured_output(StrategistAnalysis)
     proposed_pct = (amount / portfolio_value * 100) if portfolio_value > 0 else 0
-    market_context = format_market_context(market_data)
-    prompt = STRATEGIST_SYSTEM.format(
+    return llm.invoke(STRATEGIST_SYSTEM.format(
         ticker=ticker,
         amount=amount,
         portfolio_value=portfolio_value,
         proposed_pct=proposed_pct,
         risk_tolerance=risk_tolerance,
-        market_context=market_context,
-    )
-    return llm.invoke(prompt)
+        market_context=format_market_context(market_data),
+        rag_context=rag_context or _NO_RAG,
+    ))
 
 
 # ── Judge Agent ───────────────────────────────────────────────────────────────
 
 JUDGE_SYSTEM = """You are the INVESTMENT JUDGE for {ticker}.
 
-All three analysts worked from the same verified live market data shown below.
-Use it as the authoritative source of truth when settling factual disputes.
+All three analysts worked from the same live market data and document excerpts shown below.
+Use them as the authoritative ground truth when settling factual disputes between analysts.
 
+━━━ SOURCE 1 — LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {market_context}
 
-BULL ANALYST REPORT:
+━━━ SOURCE 2 — SEC FILINGS & NEWS (RAG) ━━━━━━━━━━━━━━━━━━━━
+{rag_context}
+
+━━━ BULL ANALYST REPORT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {bull_analysis}
 
-BEAR ANALYST REPORT:
+━━━ BEAR ANALYST REPORT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {bear_analysis}
 
-PORTFOLIO STRATEGIST REPORT:
+━━━ PORTFOLIO STRATEGIST REPORT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {strategist_analysis}
 
-Your task:
-1. Identify where the bull and bear cases agree vs conflict — weight by confidence scores
-2. Anchor your recommendation to the REAL current price in the market data above
-3. Accept the strategist's concentration risk assessment and recommended allocation
-4. Set a final recommended_amount that respects portfolio sizing constraints
-5. Give concrete entry_strategy and risk_management figures (e.g. "DCA at $X/month", "stop-loss at $Y")
-6. Provide a 5-dimensional confidence breakdown (0-100 each):
-   - growth_potential: strength of the bull case given real financials
-   - risk_level: severity of bear risks relative to current valuation
-   - portfolio_fit: how well this fits the user's risk profile and portfolio size
-   - timing: is NOW a good entry point given price vs analyst targets?
-   - execution_clarity: how clearly defined is the entry/exit plan?
+Your synthesis:
+1. Identify where bull and bear agree vs conflict — use the real data to arbitrate
+2. Weight analyst perspectives by their confidence scores
+3. Accept the strategist's concentration risk rating and recommended_allocation as a hard cap
+4. Set recommended_amount ≤ strategist's recommended_allocation
+5. Anchor price targets to the REAL current price in the market data
+6. Provide concrete entry_strategy (e.g. "DCA $X/month for 3 months") and
+   risk_management (e.g. "stop-loss at $Y, -Z% from current price")
+7. 5-dimensional confidence breakdown (0-100 each):
+   - growth_potential: strength of bull case given real financials
+   - risk_level: severity of bear risks vs current valuation
+   - portfolio_fit: match to user's risk profile and portfolio size
+   - timing: is NOW a good entry given price vs analyst consensus targets?
+   - execution_clarity: how well-defined is the entry/exit plan?
 
-Be decisive. Cite specific numbers. The user needs an actionable decision.
+Be decisive. Every number you cite must come from the data or analyst reports above.
 Output only valid JSON matching the JudgeRecommendation schema."""
 
 
@@ -165,14 +194,14 @@ def run_judge_agent(
     bear: BearAnalysis,
     strategist: StrategistAnalysis,
     market_data: dict,
+    rag_context: str = "",
 ) -> JudgeRecommendation:
     llm = get_judge_llm().with_structured_output(JudgeRecommendation)
-    market_context = format_market_context(market_data)
-    prompt = JUDGE_SYSTEM.format(
+    return llm.invoke(JUDGE_SYSTEM.format(
         ticker=ticker,
-        market_context=market_context,
+        market_context=format_market_context(market_data),
+        rag_context=rag_context or _NO_RAG,
         bull_analysis=bull.model_dump_json(indent=2),
         bear_analysis=bear.model_dump_json(indent=2),
         strategist_analysis=strategist.model_dump_json(indent=2),
-    )
-    return llm.invoke(prompt)
+    ))

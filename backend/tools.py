@@ -199,6 +199,7 @@ def fetch_full_market_data(ticker: str) -> dict:
                 {
                     "title": item.get("title", ""),
                     "publisher": item.get("publisher", ""),
+                    "link": item.get("link", ""),
                 }
                 for item in raw_news[:5]
                 if item.get("title")

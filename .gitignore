@@ -27,9 +27,14 @@ dist-ssr
 __pycache__/
 *.py[cod]
 *.pyo
-.env
 .venv
 venv/
+
+# Env files — keep the example, ignore real secrets
+.env
+.env.local
+.env.*.local
+!.env.example
 
 # Databases & vector stores
 *.db

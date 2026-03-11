@@ -5,22 +5,193 @@ Every agent receives two injected blocks before being asked to reason:
   1. GROUNDING — live yfinance snapshot (price, PE, margins, consensus, news headlines)
   2. RAG       — relevant excerpts from SEC 10-K/10-Q filings and full news articles
 
-This combination ensures:
-  - Numbers are anchored to real current data (grounding)
-  - Reasoning is backed by actual disclosed risks and management commentary (RAG)
+Ollama compatibility
+--------------------
+Local models (llama3.1, etc.) are invoked in plain JSON mode.  Each prompt includes
+the exact field skeleton so the model knows what top-level keys to output.  A
+robust post-processing step extracts and validates the JSON even when the model
+wraps it in an outer key.
 """
+
+import json
+import re
+from typing import TypeVar, Type
 
 from schemas import BullAnalysis, BearAnalysis, StrategistAnalysis, JudgeRecommendation
 from llm_factory import get_analyst_llm, get_judge_llm
 from tools import format_market_context
+import config
+from config import Provider
+
+T = TypeVar("T")
 
 # Shown in the prompt when no RAG documents were retrieved
 _NO_RAG = "[No additional documents available — rely on the market data above.]"
 
 
+# ── JSON extraction helpers ───────────────────────────────────────────────────
+
+def _extract_json_text(text: str) -> dict:
+    """
+    Robustly extract a JSON object from a model response.
+
+    Tries (in order):
+    1. Direct parse of the whole response.
+    2. Find the first {...} block (handles surrounding prose).
+    3. Unwrap one level of nesting (model wrapped its output in one key).
+    """
+    if not isinstance(text, str):
+        text = str(text)
+
+    # 1. Direct
+    try:
+        obj = json.loads(text.strip())
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Grep for first JSON object
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        try:
+            obj = json.loads(match.group())
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"No JSON object found in model output: {text[:300]!r}")
+
+
+def _parse_schema(raw, schema_cls: Type[T]) -> T:
+    """
+    Parse raw model output (str or already-parsed dict) into a Pydantic schema.
+
+    If the dict has exactly one key whose value is a dict, unwrap it first
+    (handles the common 'wrapping' pattern from local models).
+    """
+    if isinstance(raw, schema_cls):
+        return raw
+
+    if isinstance(raw, str):
+        obj = _extract_json_text(raw)
+    elif isinstance(raw, dict):
+        obj = raw
+    else:
+        # Some LangChain versions return AIMessage objects
+        try:
+            obj = _extract_json_text(raw.content)  # type: ignore[attr-defined]
+        except Exception:
+            raise ValueError(f"Cannot parse {type(raw).__name__} into {schema_cls.__name__}")
+
+    # Unwrap single-key nesting: {"bull_case": {...}} → {...}
+    if len(obj) == 1:
+        inner = next(iter(obj.values()))
+        if isinstance(inner, dict):
+            try:
+                return schema_cls.model_validate(inner)
+            except Exception:
+                pass
+
+    return schema_cls.model_validate(obj)
+
+
+# ── Provider-aware invocation ─────────────────────────────────────────────────
+
+def _invoke(base_llm, schema_cls: Type[T], prompt: str) -> T:
+    """
+    Invoke base_llm and return a validated instance of schema_cls.
+
+    - Cloud (Anthropic / OpenAI): use with_structured_output (tool-calling) — most accurate.
+    - Ollama (local): call the model directly with JSON mode and parse the response
+      ourselves — local models are unreliable with tool-calling on long prompts.
+    """
+    if config.PROVIDER == Provider.OLLAMA:
+        # json_mode tells Ollama to output JSON; our prompt supplies the field skeleton.
+        llm = base_llm.with_structured_output(schema_cls, method="json_mode",
+                                               include_raw=True)
+        result = llm.invoke(prompt)
+        # include_raw=True → {"raw": AIMessage, "parsed": ..., "parsing_error": ...}
+        parsed = result.get("parsed")
+        if parsed is not None and isinstance(parsed, schema_cls):
+            return parsed
+        # Fallback: parse from raw text
+        raw_msg = result.get("raw")
+        raw_text = raw_msg.content if hasattr(raw_msg, "content") else str(raw_msg)
+        return _parse_schema(raw_text, schema_cls)
+    else:
+        llm = base_llm.with_structured_output(schema_cls)
+        return llm.invoke(prompt)
+
+
+# ── Schema field skeletons (injected into Ollama prompts) ─────────────────────
+
+_BULL_SKELETON = """\
+Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper keys):
+{
+  "competitive_advantages": ["string", ...],
+  "growth_catalysts": ["string", ...],
+  "valuation_justification": "string",
+  "best_case_target": <number>,
+  "best_case_timeline": "string",
+  "confidence": <integer 0-10>,
+  "pe_ratio": <number or null>
+}"""
+
+_BEAR_SKELETON = """\
+Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper keys):
+{
+  "competition_threats": ["string", ...],
+  "valuation_concerns": "string",
+  "cyclical_risks": ["string", ...],
+  "worst_case_target": <number>,
+  "worst_case_timeline": "string",
+  "confidence": <integer 0-10>,
+  "pe_ratio": <number or null>
+}"""
+
+_STRATEGIST_SKELETON = """\
+Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper keys):
+{
+  "current_exposure": "string",
+  "concentration_risk": "LOW" | "MODERATE" | "HIGH" | "VERY HIGH",
+  "concentration_explanation": "string",
+  "recommended_allocation": <number>,
+  "reasoning": "string",
+  "alternative_options": ["string", ...]
+}"""
+
+_JUDGE_SKELETON = """\
+Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper keys):
+{
+  "action": "buy" | "hold" | "sell",
+  "recommended_amount": <number>,
+  "reasoning": "string",
+  "confidence_overall": <integer 0-100>,
+  "confidence_breakdown": {
+    "growth_potential": <integer 0-100>,
+    "risk_level": <integer 0-100>,
+    "portfolio_fit": <integer 0-100>,
+    "timing": <integer 0-100>,
+    "execution_clarity": <integer 0-100>
+  },
+  "entry_strategy": "string",
+  "risk_management": "string",
+  "key_factors": ["string", ...]
+}"""
+
+
+def _schema_hint(skeleton: str) -> str:
+    """Return the skeleton only when using a local model."""
+    if config.PROVIDER == Provider.OLLAMA:
+        return "\n\n" + skeleton
+    return ""
+
+
 # ── Bull Analyst ─────────────────────────────────────────────────────────────
 
-BULL_SYSTEM = """You are a BULL ANALYST for {ticker}.
+_BULL_BODY = """You are a BULL ANALYST for {ticker}.
 
 You have two verified data sources below. USE THEM. Do NOT rely on training-data
 guesses for prices, PE ratios, revenue figures, or growth rates.
@@ -42,22 +213,22 @@ Focus on:
 4. A specific best-case price target derived from the REAL current price shown above,
    with a credible timeline and upside percentage
 
-Cite actual numbers. Reference SEC section or news source when you use document content.
-Output only valid JSON matching the BullAnalysis schema."""
+Cite actual numbers.{schema_hint}"""
 
 
 def run_bull_agent(ticker: str, market_data: dict, rag_context: str = "") -> BullAnalysis:
-    llm = get_analyst_llm().with_structured_output(BullAnalysis)
-    return llm.invoke(BULL_SYSTEM.format(
+    prompt = _BULL_BODY.format(
         ticker=ticker,
         market_context=format_market_context(market_data),
         rag_context=rag_context or _NO_RAG,
-    ))
+        schema_hint=_schema_hint(_BULL_SKELETON),
+    )
+    return _invoke(get_analyst_llm(), BullAnalysis, prompt)
 
 
 # ── Bear Analyst ─────────────────────────────────────────────────────────────
 
-BEAR_SYSTEM = """You are a BEAR ANALYST for {ticker}.
+_BEAR_BODY = """You are a BEAR ANALYST for {ticker}.
 
 You have two verified data sources below. USE THEM. Do NOT rely on training-data
 guesses for prices, PE ratios, revenue figures, or growth rates.
@@ -79,23 +250,22 @@ Focus on:
 5. A specific worst-case price target derived from the REAL current price shown above,
    with a credible timeline and downside percentage
 
-Be skeptical. Stress-test every bullish assumption. Use the disclosed risk factors from the
-SEC filings as your primary ammunition — they are legally binding disclosures.
-Output only valid JSON matching the BearAnalysis schema."""
+Be skeptical. Stress-test every bullish assumption.{schema_hint}"""
 
 
 def run_bear_agent(ticker: str, market_data: dict, rag_context: str = "") -> BearAnalysis:
-    llm = get_analyst_llm().with_structured_output(BearAnalysis)
-    return llm.invoke(BEAR_SYSTEM.format(
+    prompt = _BEAR_BODY.format(
         ticker=ticker,
         market_context=format_market_context(market_data),
         rag_context=rag_context or _NO_RAG,
-    ))
+        schema_hint=_schema_hint(_BEAR_SKELETON),
+    )
+    return _invoke(get_analyst_llm(), BearAnalysis, prompt)
 
 
 # ── Portfolio Strategist ──────────────────────────────────────────────────────
 
-STRATEGIST_SYSTEM = """You are a PORTFOLIO STRATEGIST evaluating a position in {ticker}.
+_STRATEGIST_BODY = """You are a PORTFOLIO STRATEGIST evaluating a position in {ticker}.
 
 You have two verified data sources below. USE THEM.
 
@@ -112,18 +282,10 @@ USER PORTFOLIO CONTEXT:
   Risk tolerance:        {risk_tolerance}
 
 Using ALL sources above, determine the RIGHT position size:
-
-1. Current indirect exposure — estimate via S&P 500 / Nasdaq index fund holdings
-   (use the sector and market cap from the data above to calibrate)
-2. Concentration risk (LOW / MODERATE / HIGH):
-   - HIGH beta (>1.5) or high short interest (>10%) = tighter sizing
-   - Analyst mean target below current price = flag explicitly
-   - Customer concentration in SEC filings = raise risk rating
-3. Recommended allocation — may differ from the proposed amount if risk warrants it.
-   Provide the exact dollar figure and the reasoning behind any reduction.
-4. Alternative options that could provide similar exposure with less concentration risk
-
-Output only valid JSON matching the StrategistAnalysis schema."""
+1. Current indirect exposure via S&P 500 / Nasdaq index fund holdings
+2. Concentration risk (LOW / MODERATE / HIGH / VERY HIGH)
+3. Recommended allocation in dollars (number only — no $, no commas, no math)
+4. Alternative options for similar exposure with less concentration risk{schema_hint}"""
 
 
 def run_strategist_agent(
@@ -134,9 +296,8 @@ def run_strategist_agent(
     market_data: dict,
     rag_context: str = "",
 ) -> StrategistAnalysis:
-    llm = get_analyst_llm().with_structured_output(StrategistAnalysis)
     proposed_pct = (amount / portfolio_value * 100) if portfolio_value > 0 else 0
-    return llm.invoke(STRATEGIST_SYSTEM.format(
+    prompt = _STRATEGIST_BODY.format(
         ticker=ticker,
         amount=amount,
         portfolio_value=portfolio_value,
@@ -144,48 +305,59 @@ def run_strategist_agent(
         risk_tolerance=risk_tolerance,
         market_context=format_market_context(market_data),
         rag_context=rag_context or _NO_RAG,
-    ))
+        schema_hint=_schema_hint(_STRATEGIST_SKELETON),
+    )
+    return _invoke(get_analyst_llm(), StrategistAnalysis, prompt)
 
 
 # ── Judge Agent ───────────────────────────────────────────────────────────────
 
-JUDGE_SYSTEM = """You are the INVESTMENT JUDGE for {ticker}.
+_JUDGE_BODY = """You are the INVESTMENT JUDGE for {ticker}.
 
-All three analysts worked from the same live market data and document excerpts shown below.
-Use them as the authoritative ground truth when settling factual disputes between analysts.
-
-━━━ SOURCE 1 — LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━ LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {market_context}
 
-━━━ SOURCE 2 — SEC FILINGS & NEWS (RAG) ━━━━━━━━━━━━━━━━━━━━
-{rag_context}
-
-━━━ BULL ANALYST REPORT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━ BULL ANALYST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {bull_analysis}
 
-━━━ BEAR ANALYST REPORT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━ BEAR ANALYST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {bear_analysis}
 
-━━━ PORTFOLIO STRATEGIST REPORT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━ PORTFOLIO STRATEGIST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {strategist_analysis}
 
-Your synthesis:
-1. Identify where bull and bear agree vs conflict — use the real data to arbitrate
-2. Weight analyst perspectives by their confidence scores
-3. Accept the strategist's concentration risk rating and recommended_allocation as a hard cap
-4. Set recommended_amount ≤ strategist's recommended_allocation
-5. Anchor price targets to the REAL current price in the market data
-6. Provide concrete entry_strategy (e.g. "DCA $X/month for 3 months") and
-   risk_management (e.g. "stop-loss at $Y, -Z% from current price")
-7. 5-dimensional confidence breakdown (0-100 each):
-   - growth_potential: strength of bull case given real financials
-   - risk_level: severity of bear risks vs current valuation
-   - portfolio_fit: match to user's risk profile and portfolio size
-   - timing: is NOW a good entry given price vs analyst consensus targets?
-   - execution_clarity: how well-defined is the entry/exit plan?
+Synthesise the three reports into a final investment decision:
+1. action: buy / hold / sell
+2. recommended_amount ≤ strategist's recommended_allocation
+3. reasoning: why you chose this action
+4. confidence_overall: 0-100
+5. confidence_breakdown (5 dimensions, 0-100 each)
+6. entry_strategy: e.g. "DCA $X/month for 3 months"
+7. risk_management: e.g. "stop-loss at $Y"
+8. key_factors: top decision factors (list of strings){schema_hint}"""
 
-Be decisive. Every number you cite must come from the data or analyst reports above.
-Output only valid JSON matching the JudgeRecommendation schema."""
+
+def _condense_bull(bull: BullAnalysis) -> str:
+    return (
+        f"Confidence: {bull.confidence}/10 | Target: ${bull.best_case_target:,.0f} ({bull.best_case_timeline})\n"
+        f"Advantages: {'; '.join(bull.competitive_advantages[:3])}\n"
+        f"Catalysts: {'; '.join(bull.growth_catalysts[:2])}"
+    )
+
+
+def _condense_bear(bear: BearAnalysis) -> str:
+    return (
+        f"Confidence: {bear.confidence}/10 | Worst case: ${bear.worst_case_target:,.0f} ({bear.worst_case_timeline})\n"
+        f"Threats: {'; '.join(bear.competition_threats[:3])}\n"
+        f"Valuation: {bear.valuation_concerns[:200]}"
+    )
+
+
+def _condense_strategist(strat: StrategistAnalysis) -> str:
+    return (
+        f"Risk: {strat.concentration_risk} | Allocation: ${strat.recommended_allocation:,.0f}\n"
+        f"Reasoning: {strat.reasoning[:250]}"
+    )
 
 
 def run_judge_agent(
@@ -196,12 +368,29 @@ def run_judge_agent(
     market_data: dict,
     rag_context: str = "",
 ) -> JudgeRecommendation:
-    llm = get_judge_llm().with_structured_output(JudgeRecommendation)
-    return llm.invoke(JUDGE_SYSTEM.format(
+    # Use condensed summaries for local models to keep the prompt manageable
+    if config.PROVIDER == Provider.OLLAMA:
+        bull_txt = _condense_bull(bull)
+        bear_txt = _condense_bear(bear)
+        strat_txt = _condense_strategist(strategist)
+    else:
+        bull_txt = bull.model_dump_json(indent=2)
+        bear_txt = bear.model_dump_json(indent=2)
+        strat_txt = strategist.model_dump_json(indent=2)
+
+    prompt = _JUDGE_BODY.format(
         ticker=ticker,
         market_context=format_market_context(market_data),
-        rag_context=rag_context or _NO_RAG,
-        bull_analysis=bull.model_dump_json(indent=2),
-        bear_analysis=bear.model_dump_json(indent=2),
-        strategist_analysis=strategist.model_dump_json(indent=2),
-    ))
+        bull_analysis=bull_txt,
+        bear_analysis=bear_txt,
+        strategist_analysis=strat_txt,
+        schema_hint=_schema_hint(_JUDGE_SKELETON),
+    )
+    return _invoke(get_judge_llm(), JudgeRecommendation, prompt)
+
+
+# Backwards-compat aliases used in tests / workflow
+BULL_SYSTEM = _BULL_BODY
+BEAR_SYSTEM = _BEAR_BODY
+STRATEGIST_SYSTEM = _STRATEGIST_BODY
+JUDGE_SYSTEM = _JUDGE_BODY

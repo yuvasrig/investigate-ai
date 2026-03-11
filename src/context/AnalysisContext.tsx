@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
+import type { AnalysisResponse } from "@/services/api";
 
 interface FormData {
   ticker: string;
@@ -11,6 +12,8 @@ interface FormData {
 interface AnalysisContextType {
   formData: FormData;
   setFormData: (data: FormData) => void;
+  analysisResult: AnalysisResponse | null;
+  setAnalysisResult: (result: AnalysisResponse | null) => void;
 }
 
 const AnalysisContext = createContext<AnalysisContextType | undefined>(undefined);
@@ -23,9 +26,10 @@ export const AnalysisProvider = ({ children }: { children: ReactNode }) => {
     riskTolerance: "",
     timeHorizon: "",
   });
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
 
   return (
-    <AnalysisContext.Provider value={{ formData, setFormData }}>
+    <AnalysisContext.Provider value={{ formData, setFormData, analysisResult, setAnalysisResult }}>
       {children}
     </AnalysisContext.Provider>
   );

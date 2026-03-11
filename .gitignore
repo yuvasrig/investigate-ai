@@ -22,3 +22,20 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.venv
+venv/
+
+# Databases & vector stores
+*.db
+*.sqlite
+*.sqlite3
+chroma_db/
+
+# Test artifacts
+backend/test_*.py

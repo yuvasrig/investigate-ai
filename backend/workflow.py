@@ -152,6 +152,8 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
             ticker,
             market_data,
             rag.get("bull", ""),
+            amount,
+            portfolio_value,
         )
         bear_fut = ex.submit(
             _run_with_retry,
@@ -161,6 +163,8 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
             ticker,
             market_data,
             rag.get("bear", ""),
+            amount,
+            portfolio_value,
         )
         strategist_fut = ex.submit(
             _run_with_retry,

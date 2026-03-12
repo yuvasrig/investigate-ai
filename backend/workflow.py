@@ -25,8 +25,9 @@ from typing import TypedDict, Optional, Any, Callable, TypeVar
 
 from langgraph.graph import StateGraph, END
 
-from schemas import BullAnalysis, BearAnalysis, StrategistAnalysis, JudgeRecommendation
+from schemas import BullAnalysis, BearAnalysis, StrategistAnalysis, JudgeRecommendation, IntentRouterResult
 from agents import run_bull_agent, run_bear_agent, run_strategist_agent, run_judge_agent
+from agents.intent_router import route_intent
 from tools import fetch_full_market_data
 from rag.retriever import ingest_ticker, retrieve_all_agents
 
@@ -43,6 +44,10 @@ class InvestmentState(TypedDict):
     risk_tolerance: str
     time_horizon: str
     analysis_action: str  # "buy" | "sell" | "hold"
+    user_query: Optional[str] # Triggering narrative
+
+    # Intent routing
+    intent: Optional[IntentRouterResult]
 
     # Live market snapshot (populated by fetch_data node)
     market_data: Optional[dict]
@@ -67,6 +72,17 @@ def fetch_data_node(state: InvestmentState) -> dict[str, Any]:
     """Pull ~35 real-time fields from yfinance before any agent runs."""
     market_data = fetch_full_market_data(state["ticker"])
     return {"market_data": market_data}
+
+
+# ── Node 1.5 — Intent Routing (Tier 2) ────────────────────────────────────────
+
+def intent_router_node(state: InvestmentState) -> dict[str, Any]:
+    """Parse free-text query into structured scenarios if provided."""
+    query = state.get("user_query")
+    if not query:
+        return {"intent": IntentRouterResult(target_asset=state["ticker"], scenarios=[], requires_deep_dive=True)}
+    intent = route_intent(query)
+    return {"intent": intent}
 
 
 # ── Node 2 — RAG ingestion & retrieval ───────────────────────────────────────
@@ -144,6 +160,8 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
     analysis_action = state.get("analysis_action", "buy")
     market_data = state["market_data"] or {}
     rag = state.get("rag_context") or {}
+    intent = state.get("intent")
+    scenarios = intent.scenarios if intent else []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
         bull_fut = ex.submit(
@@ -157,6 +175,7 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
             amount,
             portfolio_value,
             analysis_action,
+            scenarios,
         )
         bear_fut = ex.submit(
             _run_with_retry,
@@ -169,6 +188,7 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
             amount,
             portfolio_value,
             analysis_action,
+            scenarios,
         )
         strategist_fut = ex.submit(
             _run_with_retry,
@@ -176,7 +196,7 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
             StrategistAnalysis,
             run_strategist_agent,
             ticker, amount, portfolio_value, risk_tolerance,
-            market_data, rag.get("strategist", ""), None, analysis_action,
+            market_data, rag.get("strategist", ""), None, analysis_action, scenarios,
         )
         bull = bull_fut.result()
         bear = bear_fut.result()
@@ -264,6 +284,9 @@ def judge_node(state: InvestmentState) -> dict[str, Any]:
             + ", ".join(missing)
         )
 
+    intent = state.get("intent")
+    scenarios = intent.scenarios if intent else []
+
     # Type narrowing for static analyzers; runtime already validated above.
     assert bull is not None and bear is not None and strategist is not None
 
@@ -278,6 +301,7 @@ def judge_node(state: InvestmentState) -> dict[str, Any]:
         state["market_data"] or {},
         rag.get("judge", ""),
         state.get("analysis_action", "buy"),
+        scenarios,
         max_retries=_JUDGE_MAX_RETRIES,
     )
     return {"final_recommendation": recommendation}
@@ -289,13 +313,15 @@ def build_workflow() -> Any:
     graph = StateGraph(InvestmentState)
 
     graph.add_node("fetch_data", fetch_data_node)
+    graph.add_node("intent_router", intent_router_node)
     graph.add_node("rag_ingest", rag_node)
     graph.add_node("parallel_analysis", parallel_analysis_node)
     graph.add_node("verify_facts", verify_facts_node)
     graph.add_node("judge", judge_node)
 
     graph.set_entry_point("fetch_data")
-    graph.add_edge("fetch_data", "rag_ingest")
+    graph.add_edge("fetch_data", "intent_router")
+    graph.add_edge("intent_router", "rag_ingest")
     graph.add_edge("rag_ingest", "parallel_analysis")
     graph.add_conditional_edges(
         "parallel_analysis",
@@ -327,6 +353,7 @@ def run_analysis(
     risk_tolerance: str,
     time_horizon: str,
     analysis_action: str = "buy",
+    user_query: Optional[str] = None,
 ) -> InvestmentState:
     """Execute the full grounded + RAG investment analysis workflow."""
     initial_state: InvestmentState = {
@@ -335,7 +362,9 @@ def run_analysis(
         "portfolio_value": portfolio_value,
         "risk_tolerance": risk_tolerance,
         "time_horizon": time_horizon,
+        "user_query": user_query,
         "analysis_action": analysis_action,
+        "intent": None,
         "market_data": None,
         "rag_context": None,
         "rag_summary": None,

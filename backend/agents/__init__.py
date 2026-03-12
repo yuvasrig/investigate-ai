@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from typing import TypeVar, Type
 
-from schemas import BullAnalysis, BearAnalysis, StrategistAnalysis, JudgeRecommendation
+from schemas import BullAnalysis, BearAnalysis, StrategistAnalysis, JudgeRecommendation, VerifiedClaim
 from llm_factory import get_analyst_llm, get_judge_llm
 from tools import format_market_context
 import config
@@ -102,8 +102,14 @@ def _invoke(base_llm, schema_cls: Type[T], prompt: str) -> T:
 _BULL_SKELETON = """\
 Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper keys):
 {
-  "competitive_advantages": ["string", ...],
-  "growth_catalysts": ["string", ...],
+  "competitive_advantages": [
+    {"claim": "string", "is_speculative": true | false},
+    ...
+  ],
+  "growth_catalysts": [
+    {"claim": "string", "is_speculative": true | false},
+    ...
+  ],
   "valuation_justification": "string",
   "best_case_target": <number>,
   "best_case_timeline": "string",
@@ -114,9 +120,15 @@ Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper 
 _BEAR_SKELETON = """\
 Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper keys):
 {
-  "competition_threats": ["string", ...],
+  "competition_threats": [
+    {"claim": "string", "is_speculative": true | false},
+    ...
+  ],
   "valuation_concerns": "string",
-  "cyclical_risks": ["string", ...],
+  "cyclical_risks": [
+    {"claim": "string", "is_speculative": true | false},
+    ...
+  ],
   "worst_case_target": <number>,
   "worst_case_timeline": "string",
   "confidence": <integer 0-10>,
@@ -155,7 +167,22 @@ Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper 
   },
   "entry_strategy": "string",
   "risk_management": "string",
-  "key_factors": ["string", ...]
+  "traffic_light_color": "red" | "yellow" | "green",
+  "evaluated_scenarios": [
+    {"scenario_name": "string", "verified_analog_used": "string"},
+    ...
+  ],
+  "key_factors": ["string", ...],
+  "evidence_assessment": {
+    "bull": {"data_citations": 0, "calculation_rigor": 0, "historical_precedent": 0, "counterargument": 0, "total": 0},
+    "bear": {"data_citations": 0, "calculation_rigor": 0, "historical_precedent": 0, "counterargument": 0, "total": 0},
+    "strategist": {"data_citations": 0, "calculation_rigor": 0, "historical_precedent": 0, "counterargument": 0, "total": 0},
+    "bull_weighted": 0.0,
+    "bear_weighted": 0.0,
+    "strategist_weighted": 0.0,
+    "winner": "bull" | "bear" | "strategist",
+    "winner_reasoning": "string"
+  }
 }"""
 
 
@@ -210,8 +237,12 @@ def run_bull_agent(
     amount: float = 0,
     portfolio_value: float = 0,
     analysis_action: str = "buy",
+    scenarios: list[str] = None,
 ) -> BullAnalysis:
     """Professional bull analyst with peer comparisons and institutional-grade prompts."""
+
+    scenarios = scenarios or []
+    scenario_text = "\n".join(f"- {s}" for s in scenarios) if scenarios else "None."
 
     peer_data    = fetch_peer_data(ticker)
     peers_text   = _format_peers(peer_data)
@@ -307,13 +338,18 @@ ANALYST CONSENSUS ({n_analysts} analysts):
 
 YOUR TASK: {task_line}
 
-ANALYSIS REQUIREMENTS:
-1. Investment thesis (2-3 sentences: expected return, timeline, key catalyst)
-2. Revenue model: growth drivers (unit × ASP × market share), 3-year trajectory
-3. Valuation: justify forward P/E vs peers above — warranted by ROIC/growth/moat?
-4. Specific price target derived from REAL current price (${price:.2f}) with upside %
-5. 3-5 key risks you're monitoring with mitigants (be honest — builds credibility)
-6. Conviction 0-10: cite data quality, thesis clarity, risk/reward ratio, catalyst visibility
+ANALYSIS REQUIREMENTS & CHAIN-OF-VERIFICATION (CoVe):
+1. Investment thesis (2-3 sentences: expected return, timeline, key catalyst).
+2. Revenue model & factors.
+3. Valuation justification.
+4. Specific price target derived from REAL current price (${price:.2f}).
+5. 3-5 key risks monitored.
+6. Conviction 0-10.
+7. SCENARIO EVALUATION: For any macro stress-test scenarios provided below, evaluate the asset utilizing historical analogs from the RAG context.
+8. CHAIN-OF-VERIFICATION: You MUST verify every numerical claim (margins, growth rates, etc.) against the LIVE MARKET DATA or SEC FILINGS (RAG) sections. Unverified claims MUST be flagged as `is_speculative: true` in your JSON output.
+
+STRESS-TEST SCENARIOS TO EVALUATE:
+{scenario_text}
 
 Use specific numbers. Cite sources ("per management guidance", "SEC 10-K", "consensus estimate").
 Cite recent earnings headlines above when relevant.
@@ -333,8 +369,12 @@ def run_bear_agent(
     amount: float = 0,
     portfolio_value: float = 0,
     analysis_action: str = "buy",
+    scenarios: list[str] = None,
 ) -> BearAnalysis:
     """Professional bear analyst with historical pattern analysis and competitive threats."""
+
+    scenarios = scenarios or []
+    scenario_text = "\n".join(f"- {s}" for s in scenarios) if scenarios else "None."
 
     hist         = fetch_historical_patterns(ticker)
     peer_data    = fetch_peer_data(ticker)
@@ -410,16 +450,17 @@ Your job: Find flaws in the bull thesis. Be the voice of rigorous, evidence-base
 
 YOUR TASK: {task_line}
 
-ANALYSIS REQUIREMENTS:
-1. Counter-thesis (2-3 sentences: core bear case, expected downside, catalyst for decline)
-2. Challenge bull assumptions:
-   A. Revenue sustainability (cyclical vs structural? customer concentration? ASP pressure?)
-   B. Margin sustainability (are we at peak? use historical data above for precedent)
-   C. Valuation excess (what's priced in? compare to peers; show premium vs growth rate)
-3. Structural headwinds: regulatory, geopolitical, technology substitution, capex sustainability
-4. Downside scenario: bear case EPS × trough P/E = target price; show downside % from ${price:.2f}
-5. What would change your mind (intellectual honesty — builds credibility)
-6. Conviction 0-10: strength of structural concerns, historical precedent clarity, catalyst visibility
+ANALYSIS REQUIREMENTS & CHAIN-OF-VERIFICATION (CoVe):
+1. Counter-thesis (2-3 sentences: core bear case, downside, catalyst).
+2. Challenge bull assumptions.
+3. Structural headwinds.
+4. Downside scenario price target.
+5. Conviction 0-10.
+6. SCENARIO EVALUATION: For any macro stress-test scenarios provided below, evaluate the asset utilizing historical analogs from the RAG context (e.g., 2008 GFC, 1970s stagflation). 
+7. CHAIN-OF-VERIFICATION: You MUST verify every numerical claim against the LIVE MARKET DATA or SEC FILINGS (RAG) sections. Unverified claims MUST be flagged as `is_speculative: true` in your JSON output.
+
+STRESS-TEST SCENARIOS TO EVALUATE:
+{scenario_text}
 
 "History suggests..." not "I believe...". Use historical data above.
 Acknowledge bull's valid points — a fair bear case is more credible than a one-sided hit piece.{_schema_hint(_BEAR_SKELETON)}"""
@@ -440,8 +481,9 @@ def run_strategist_agent(
     rag_context: str = "",
     portfolio_holdings: list | None = None,
     analysis_action: str = "buy",
+    scenarios: list[str] = None,
 ) -> StrategistAnalysis:
-    """Professional portfolio strategist with full concentration, correlation and rebalancing analysis."""
+    """Professional portfolio strategist with portfolio hidden-exposure logic."""
 
     pm = {}
     if portfolio_holdings:
@@ -529,8 +571,9 @@ YOUR TASK: {task_line}
 
 YOUR ANALYSIS FRAMEWORK:
 
-1. PORTFOLIO HEALTH
-   Red flags: single stock >15%, sector >30%, zero international, 100% equities, zero bonds
+1. PORTFOLIO HEALTH (The Look-Through Engine)
+   Red flags: single stock >15%, sector >30%, zero international, 100% equities, zero bonds.
+   Mandate: Calculate "Hidden Exposure". Look inside diversified ETFs (SPY, QQQ) using the portfolio analysis metrics provided above to find overlapping concentration. Highlight this clearly in the `concentration_explanation`.
 
 2. REBALANCING STRATEGIES (2-3 options)
    Strategy A: Trim concentrated position → free up room for {ticker}
@@ -558,18 +601,21 @@ Risk tolerance: {risk_tolerance}{_schema_hint(_STRATEGIST_SKELETON)}"""
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _condense_bull(bull: BullAnalysis) -> str:
+    adv = [a.claim for a in bull.competitive_advantages[:2]] if bull.competitive_advantages else []
+    cat = [c.claim for c in bull.growth_catalysts[:2]] if bull.growth_catalysts else []
     return (
         f"Conviction: {bull.confidence}/10  |  Target: ${bull.best_case_target:,.0f} ({bull.best_case_timeline})\n"
-        f"Advantages: {'; '.join(bull.competitive_advantages[:2])}\n"
-        f"Catalysts:  {'; '.join(bull.growth_catalysts[:2])}\n"
+        f"Advantages: {'; '.join(adv)}\n"
+        f"Catalysts:  {'; '.join(cat)}\n"
         f"Valuation:  {bull.valuation_justification[:200]}"
     )
 
 
 def _condense_bear(bear: BearAnalysis) -> str:
+    threats = [t.claim for t in bear.competition_threats[:2]] if bear.competition_threats else []
     return (
         f"Conviction: {bear.confidence}/10  |  Worst case: ${bear.worst_case_target:,.0f} ({bear.worst_case_timeline})\n"
-        f"Threats:    {'; '.join(bear.competition_threats[:2])}\n"
+        f"Threats:    {'; '.join(threats)}\n"
         f"Valuation:  {bear.valuation_concerns[:200]}"
     )
 
@@ -589,8 +635,12 @@ def run_judge_agent(
     market_data: dict,
     rag_context: str = "",
     analysis_action: str = "buy",
+    scenarios: list[str] = None,
 ) -> JudgeRecommendation:
-    """CIO-level synthesis using Kelly-criterion-inspired position sizing."""
+    """CIO-level synthesis using Evidence-Based Scoring and Hallucination Penalties."""
+
+    scenarios = scenarios or []
+    scenario_text = "\n".join(f"- {s}" for s in scenarios) if scenarios else "None."
 
     price     = _md(market_data, "currentPrice", "current_price")
     bull_conv = bull.confidence * 10
@@ -656,12 +706,24 @@ Bull conviction: {bull_conv:.0f}/100  |  Bear conviction: {bear_conv:.0f}/100
 
 DECISION FRAMEWORK:
 
-EVIDENCE WEIGHTING:
-• Hard data (earnings, guidance, SEC filings) > speculation
-• Recent evidence (last quarter) > historical patterns
-• Bull's strongest point: [cite from above]
-• Bear's strongest point: [cite from above]
-• Strategist's portfolio constraint: [cite recommended allocation]
+EVIDENCE EVALUATION FRAMEWORK:
+CRITICAL: You must evaluate argument QUALITY, not just conviction levels.
+For each analyst (Bull, Bear, Strategist), score their argument quality on these dimensions:
+1. DATA CITATIONS (0-10 points): Multiple specific data points with sources (10), some data (7), vague claims (4), no data (0).
+2. CALCULATION RIGOR (0-10 points): Shows work/methodology (10), mentions methodology broadly (7), states conclusion only (4), no rigor (0).
+3. HISTORICAL PRECEDENT (0-10 points): Specific comparables (10), generic history (7), vague (4), no context (0).
+4. COUNTERARGUMENT STRENGTH (0-10 points): Addresses opposing view directly (10), mentions opposition (7), ignores (4), one-sided (0).
+TOTAL EVIDENCE SCORE = sum of 4 dimensions (max 40)
+
+HALLUCINATION PENALTY:
+Check the `is_speculative` flag on numerical claims used by the Bull and Bear.
+DEDUCT 20 POINTS from the Analyst's Total Evidence Score for utilizing unverified numerical claims.
+
+DECISION WEIGHTING FORMULA (use for evidence_assessment logic):
+Weighted Score = (Analyst_Conviction × Analyst_Total_Evidence_Score) / 40
+Example: 87 conviction × (35/40 evidence) = 76.1 weighted score.
+Populate the `evidence_assessment` fields with these scores. The recommendation must heavily weight the analyst with the highest weighted score.
+Please output the evaluated scenarios and explicitly state what verified historical analog was used to score them.
 
 POSITION SIZING (Modified Kelly):
 • Bull conv >80, Bear conv <60 + low correlation   → 100% of planned size
@@ -673,80 +735,14 @@ HARD CONSTRAINTS (must not violate):
 • Max 15% single-stock portfolio concentration
 • {action_note}
 
-TRAFFIC LIGHT LOGIC (include reasoning in risk_management field):
+TRAFFIC LIGHT LOGIC & SCENARIO EVALUATION:
+CRITICAL: If ANY stress scenario provided below correlates with an expected >2sigma historical drawdown based on RAG precedent, the Traffic Light MUST be RED regardless of other factors.
 🟢 GREEN: conviction gap <15 pts, bull dominant, low portfolio correlation
 🟡 YELLOW: gap 15-30 pts, or valuation stretched but growth intact, or borderline concentration
-🔴 RED: gap >30 pts, or >20% portfolio concentration, or structural headwinds dominant
+🔴 RED: gap >30 pts, or >20% portfolio concentration, or structural headwinds dominant, OR >2sigma drawdown scenario detected.
 
-REQUIRED OUTPUT FIELDS:
-• action: "buy" / "hold" / "sell"
-• recommended_amount: specific dollar amount
-• reasoning: 2-3 sentences integrating all three perspectives
-• confidence_overall: 0-100
-• confidence_breakdown: growth_potential, risk_level, portfolio_fit, timing, execution_clarity (each 0-100)
-• entry_strategy: "DCA $X/month for N months" or "Single purchase at market"
-• risk_management: specific price levels (-10% alert, -20% stop-loss) + traffic light color + reason
-• key_factors: top 3-5 factors that drove the decision{_schema_hint(_JUDGE_SKELETON)}"""
-
-    return _invoke(get_judge_llm(), JudgeRecommendation, prompt)
-
-    price     = _md(market_data, "currentPrice", "current_price")
-    bull_conv = bull.confidence * 10
-    bear_conv = bear.confidence * 10
-    conv_gap  = abs(bull_conv - bear_conv)
-    net_bull  = bull_conv - bear_conv
-    signal    = "STRONG BULL" if net_bull > 20 else "STRONG BEAR" if net_bull < -20 else "MIXED"
-
-    if config.PROVIDER == Provider.OLLAMA:
-        bull_txt  = _condense_bull(bull)
-        bear_txt  = _condense_bear(bear)
-        strat_txt = _condense_strategist(strategist)
-    else:
-        bull_txt  = bull.model_dump_json(indent=2)
-        bear_txt  = bear.model_dump_json(indent=2)
-        strat_txt = strategist.model_dump_json(indent=2)
-
-    prompt = f"""You are the Chief Investment Officer allocating capital across a $10B portfolio.
-Synthesise Bull, Bear, and Portfolio Strategist into ONE decisive, actionable recommendation.
-
-━━━ SIGNAL SUMMARY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Ticker: {ticker}  |  Price: ${price:.2f}  |  Consensus: {signal}  |  Conviction gap: {conv_gap:.0f} pts
-Bull conviction: {bull_conv:.0f}/100  |  Bear conviction: {bear_conv:.0f}/100
-
-━━━ 🐂 BULL ANALYST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{bull_txt}
-
-━━━ 🐻 BEAR ANALYST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{bear_txt}
-
-━━━ 📊 PORTFOLIO STRATEGIST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{strat_txt}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-DECISION FRAMEWORK:
-
-EVIDENCE WEIGHTING:
-• Hard data (earnings, guidance, SEC filings) > speculation
-• Recent evidence (last quarter) > historical patterns
-• Bull's strongest point: [cite from above]
-• Bear's strongest point: [cite from above]
-• Strategist's portfolio constraint: [cite recommended allocation]
-
-POSITION SIZING (Modified Kelly):
-• Bull conv >80, Bear conv <60 + low correlation   → 100% of planned size
-• Bull conv 70-80, Bear conv 60-70 + med correlation → 60-75% of size
-• Mixed/high correlation                             → 30-50% or reduce to strategist cap
-
-HARD CONSTRAINTS (must not violate):
-• recommended_amount ≤ strategist's recommended_allocation
-• Max 15% single-stock portfolio concentration
-• action: must be "buy", "hold", or "sell"
-
-TRAFFIC LIGHT LOGIC (include reasoning in risk_management field):
-🟢 GREEN: conviction gap <15 pts, bull dominant, low portfolio correlation
-🟡 YELLOW: gap 15-30 pts, or valuation stretched but growth intact, or borderline concentration
-🔴 RED: gap >30 pts, or >20% portfolio concentration, or structural headwinds dominant
+STRESS-TEST SCENARIOS DETECTED FROM USER:
+{scenario_text}
 
 REQUIRED OUTPUT FIELDS:
 • action: "buy" / "hold" / "sell"

@@ -8,7 +8,7 @@ Setup:
   2. Add to backend/.env:
        PLAID_CLIENT_ID=your_client_id
        PLAID_SECRET=your_sandbox_secret
-       PLAID_ENV=sandbox     # sandbox | development | production
+       PLAID_ENV=sandbox     # sandbox | production
   3. Install: pip install plaid-python>=14.0.0
 
 Sandbox test credentials: username=user_good  password=pass_good
@@ -37,7 +37,6 @@ try:
 
     _ENV_MAP = {
         "sandbox":     plaid.Environment.Sandbox,
-        "development": plaid.Environment.Development,
         "production":  plaid.Environment.Production,
     }
 

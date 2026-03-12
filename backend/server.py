@@ -1,3 +1,4 @@
+import json
 import time
 import uuid
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ from schemas import (
     AnalysisRequest, AnalysisResponse, TrafficLightResult, KellySizingResult,
     RegisterRequest, LoginRequest, TokenResponse, UserResponse,
     WatchlistCreate, WatchlistResponse, AlertCreate, AlertResponse,
-    TaxHarvestRequest,
+    TaxHarvestRequest, IntentRouterResult
 )
 from workflow import run_analysis
 from llm_factory import health_check as llm_health_check
@@ -178,6 +179,13 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
     if portfolio_value <= 0:
         raise HTTPException(status_code=400, detail="Portfolio total_value must be positive")
 
+    holdings_cache_key = ""
+    if body.portfolio_holdings:
+        holdings_cache_key = json.dumps(
+            [holding.model_dump() for holding in body.portfolio_holdings],
+            sort_keys=True,
+        )
+
     # ── Cache check ───────────────────────────────────────────────────────────
     cached = get_cached(
         ticker,
@@ -185,6 +193,9 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
         portfolio_value,
         body.risk_tolerance,
         body.time_horizon,
+        body.user_query or "",
+        body.analysis_action,
+        holdings_cache_key,
     )
     if cached:
         return AnalysisResponse(**cached)
@@ -199,6 +210,7 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
             risk_tolerance=body.risk_tolerance,
             time_horizon=body.time_horizon,
             analysis_action=body.analysis_action,
+            user_query=body.user_query,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
@@ -251,6 +263,7 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
             bear_analysis=result["bear_analysis"],
             strategist_analysis=result["strategist_analysis"],
             final_recommendation=result["final_recommendation"],
+            intent=result.get("intent"),
             market_data=result.get("market_data"),
             rag_summary=result.get("rag_summary"),
             traffic_light=traffic_light,
@@ -288,6 +301,9 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
         portfolio_value,
         body.risk_tolerance,
         body.time_horizon,
+        body.user_query or "",
+        body.analysis_action,
+        holdings_cache_key,
         response_dict,
     )
 
@@ -404,7 +420,7 @@ def portfolio_analyze_complete(body: dict):
     growth positions, concentration risks, and missing protections.
 
     Body: { "holdings": [...], "total_value": 80000 }
-    Returns the full PortfolioReport structure consumed by PortfolioReportCard.
+    Returns the full Tier1ScanResult structure.
     """
     try:
         report = analyze_complete_portfolio(body)

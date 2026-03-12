@@ -7,6 +7,7 @@ interface FormData {
   portfolio: string;
   riskTolerance: string;
   timeHorizon: string;
+  userQuery: string;
 }
 
 // A single holding as returned by the Plaid exchange endpoint (or demo portfolio)
@@ -53,6 +54,7 @@ export const AnalysisProvider = ({ children }: { children: ReactNode }) => {
     portfolio: "",
     riskTolerance: "",
     timeHorizon: "",
+    userQuery: "",
   });
 
   // Seed from localStorage so /results works even after a page reload

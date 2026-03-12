@@ -15,9 +15,14 @@ export interface ConfidenceBreakdown {
   execution_clarity: number;
 }
 
+export interface VerifiedClaim {
+  claim: string;
+  is_speculative: boolean;
+}
+
 export interface BullAnalysis {
-  competitive_advantages: string[];
-  growth_catalysts: string[];
+  competitive_advantages: VerifiedClaim[];
+  growth_catalysts: VerifiedClaim[];
   valuation_justification: string;
   best_case_target: number;
   best_case_timeline: string;
@@ -26,9 +31,9 @@ export interface BullAnalysis {
 }
 
 export interface BearAnalysis {
-  competition_threats: string[];
+  competition_threats: VerifiedClaim[];
   valuation_concerns: string;
-  cyclical_risks: string[];
+  cyclical_risks: VerifiedClaim[];
   worst_case_target: number;
   worst_case_timeline: string;
   confidence: number;
@@ -44,6 +49,36 @@ export interface StrategistAnalysis {
   alternative_options: string[];
 }
 
+export interface AgentEvidenceScore {
+  data_citations: number;      // 0-10
+  calculation_rigor: number;   // 0-10
+  historical_precedent: number; // 0-10
+  counterargument: number;     // 0-10
+  total: number;               // 0-40
+}
+
+export interface EvidenceAssessment {
+  bull: AgentEvidenceScore;
+  bear: AgentEvidenceScore;
+  strategist: AgentEvidenceScore;
+  bull_weighted: number;
+  bear_weighted: number;
+  strategist_weighted: number;
+  winner: "bull" | "bear" | "strategist";
+  winner_reasoning: string;
+}
+
+export interface EvaluatedScenario {
+  scenario_name: string;
+  verified_analog_used: string;
+}
+
+export interface IntentRouterResult {
+  target_asset: string | null;
+  scenarios: string[];
+  requires_deep_dive: boolean;
+}
+
 export interface JudgeRecommendation {
   action: string;
   recommended_amount: number;
@@ -52,7 +87,10 @@ export interface JudgeRecommendation {
   confidence_breakdown: ConfidenceBreakdown;
   entry_strategy: string;
   risk_management: string;
+  traffic_light_color: "red" | "yellow" | "green";
+  evaluated_scenarios: EvaluatedScenario[];
   key_factors: string[];
+  evidence_assessment?: EvidenceAssessment | null;
 }
 
 export interface TrafficLightResult {
@@ -110,10 +148,19 @@ export interface AnalysisResponse {
   bear_analysis: BearAnalysis;
   strategist_analysis: StrategistAnalysis;
   final_recommendation: JudgeRecommendation;
+  intent: IntentRouterResult | null;
   market_data: Record<string, unknown> | null;
   rag_summary: { sec: number; news: number; cache_hit: boolean } | null;
   traffic_light: TrafficLightResult | null;
   portfolio_exposure: ExposureData | null;
+  kelly_sizing?: {
+    kelly_fraction: number;
+    raw_kelly_amount: number;
+    correlation_adjusted_amount: number;
+    final_amount: number;
+    sizing_rationale: string;
+    scale_factor: number;
+  } | null;
   execution_time: number;
   timestamp: string;
 }
@@ -131,6 +178,7 @@ export interface AnalyzeRequest {
   portfolio: { total_value: number };
   risk_tolerance: string;
   time_horizon: string;
+  user_query?: string;
   analysis_action?: "buy" | "sell" | "hold";
   portfolio_holdings?: PortfolioHolding[];
 }

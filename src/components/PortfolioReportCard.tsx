@@ -11,6 +11,8 @@
  */
 
 import { useState } from "react";
+import { motion } from "framer-motion";
+import CountUp from "react-countup";
 import {
   ShieldAlert, TrendingUp, Target, Shield,
   ChevronDown, ChevronRight, AlertTriangle, Info,
@@ -94,7 +96,7 @@ function RiskScoreBar({ score }: { score: number }) {
         />
       </div>
       <span className={`text-xs font-bold whitespace-nowrap ${cfg.color}`}>
-        {score.toFixed(1)} / 10
+        <CountUp end={score} duration={0.9} decimals={1} /> / 10
       </span>
     </div>
   );
@@ -357,7 +359,12 @@ export default function PortfolioReportCard({ report, onAnalyze }: Props) {
                   onToggle={() => setOpenCore((v) => !v)}
                 />
                 {openCore && (
-                  <div className="pb-1">
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    transition={{ duration: 0.2 }}
+                    className="pb-1"
+                  >
                     <p className="px-4 pb-2 text-[10px] text-muted-foreground italic">
                       Strategy: Buy &amp; hold through market cycles — don&apos;t overthink these
                     </p>
@@ -369,7 +376,7 @@ export default function PortfolioReportCard({ report, onAnalyze }: Props) {
                         accentColor="text-emerald-400"
                       />
                     ))}
-                  </div>
+                  </motion.div>
                 )}
               </div>
             )}
@@ -387,7 +394,12 @@ export default function PortfolioReportCard({ report, onAnalyze }: Props) {
                   onToggle={() => setOpenGrowth((v) => !v)}
                 />
                 {openGrowth && (
-                  <div className="pb-1">
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    transition={{ duration: 0.2 }}
+                    className="pb-1"
+                  >
                     <p className="px-4 pb-2 text-[10px] text-muted-foreground italic">
                       Strategy: Monitor closely — click any holding to run a 4-agent deep analysis
                     </p>
@@ -399,7 +411,7 @@ export default function PortfolioReportCard({ report, onAnalyze }: Props) {
                         accentColor="text-amber-400"
                       />
                     ))}
-                  </div>
+                  </motion.div>
                 )}
               </div>
             )}
@@ -416,7 +428,12 @@ export default function PortfolioReportCard({ report, onAnalyze }: Props) {
                   onToggle={() => setOpenRisks((v) => !v)}
                 />
                 {openRisks && (
-                  <div className="pt-2 pb-1">
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    transition={{ duration: 0.2 }}
+                    className="pt-2 pb-1"
+                  >
                     {concentration_risks.map((r, i) => (
                       <RiskCard
                         key={i}
@@ -424,7 +441,7 @@ export default function PortfolioReportCard({ report, onAnalyze }: Props) {
                         onFix={onAnalyze}
                       />
                     ))}
-                  </div>
+                  </motion.div>
                 )}
               </div>
             )}
@@ -441,7 +458,12 @@ export default function PortfolioReportCard({ report, onAnalyze }: Props) {
                   onToggle={() => setOpenMissing((v) => !v)}
                 />
                 {openMissing && (
-                  <div className="pt-2 pb-1">
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    transition={{ duration: 0.2 }}
+                    className="pt-2 pb-1"
+                  >
                     {missing_protections.map((p, i) => (
                       <ProtectionCard
                         key={i}
@@ -449,7 +471,7 @@ export default function PortfolioReportCard({ report, onAnalyze }: Props) {
                         onAnalyze={onAnalyze}
                       />
                     ))}
-                  </div>
+                  </motion.div>
                 )}
               </div>
             )}

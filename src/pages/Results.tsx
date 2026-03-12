@@ -1,11 +1,21 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TrendingUp, AlertTriangle, Target, Scale, CheckCircle2, AlertCircle, FileDown, Loader2, Info } from "lucide-react";
+import { TrendingUp, AlertTriangle, Target, Scale, CheckCircle2, AlertCircle, FileDown, Loader2, Info, FlaskConical, Trophy, ChevronDown, ChevronUp } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAnalysis } from "@/context/AnalysisContext";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip } from "recharts";
 import { TrafficLight } from "@/components/TrafficLight";
 import { PortfolioExposure, ExposureData } from "@/components/PortfolioExposure";
+import DynamicIntentBadge from "@/components/DynamicIntentBadge";
+import EvaluatedScenariosMatrix from "@/components/EvaluatedScenariosMatrix";
+import type {
+  AgentEvidenceScore,
+  BearAnalysis,
+  BullAnalysis,
+  EvidenceAssessment,
+  StrategistAnalysis,
+  VerifiedClaim,
+} from "@/services/api";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:8000";
 
@@ -94,6 +104,409 @@ function WarningBanner({
   );
 }
 
+function countSpeculativeClaims(claims: VerifiedClaim[]): number {
+  return claims.filter((claim) => claim.is_speculative).length;
+}
+
+function ClaimList({
+  claims,
+  icon,
+  iconColor,
+}: {
+  claims: VerifiedClaim[];
+  icon: React.ReactNode;
+  iconColor: string;
+}) {
+  return (
+    <ul className="space-y-2">
+      {claims.map((item, index) => (
+        <li key={`${item.claim}-${index}`} className="flex items-start gap-2 text-sm text-muted-foreground">
+          <span className={`shrink-0 mt-0.5 ${iconColor}`}>{icon}</span>
+          <div className="min-w-0">
+            <span>{item.claim}</span>
+            {item.is_speculative && (
+              <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                speculative
+              </span>
+            )}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// ── Evidence Scoring Components ───────────────────────────────────────────────
+
+function ScoreBar({ label, score, max }: { label: string; score: number; max: number }) {
+  const pct = Math.round((score / max) * 100);
+  const color =
+    pct >= 80 ? "bg-bull" : pct >= 60 ? "bg-amber-400" : pct >= 40 ? "bg-orange-400" : "bg-bear";
+  return (
+    <div>
+      <div className="flex items-center justify-between text-xs mb-1">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-semibold tabular-nums text-foreground">
+          {score}/{max}
+        </span>
+      </div>
+      <div className="h-1.5 w-full rounded-full bg-secondary overflow-hidden">
+        <div
+          className={`h-full rounded-full ${color} transition-all duration-700`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function EvidenceScoreCard({
+  scores,
+  weightedScore,
+  agentColor,
+  hallucinationPenalty = 0,
+  speculativeClaimsCount = 0,
+}: {
+  scores: AgentEvidenceScore;
+  weightedScore: number;
+  agentColor: string;
+  hallucinationPenalty?: number;
+  speculativeClaimsCount?: number;
+}) {
+  const totalPct = Math.round((scores.total / 40) * 100);
+  const ringColor =
+    totalPct >= 75 ? "text-bull" : totalPct >= 55 ? "text-amber-500" : "text-bear";
+
+  return (
+    <div className="mt-4 pt-4 border-t border-border">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+          <FlaskConical size={13} className="text-muted-foreground" />
+          Evidence Quality
+        </div>
+        <span className={`text-lg font-bold tabular-nums ${ringColor}`}>
+          {scores.total}/40
+        </span>
+      </div>
+      <div className="space-y-2">
+        <ScoreBar label="Data Citations" score={scores.data_citations} max={10} />
+        <ScoreBar label="Calculation Rigor" score={scores.calculation_rigor} max={10} />
+        <ScoreBar label="Historical Precedent" score={scores.historical_precedent} max={10} />
+        <ScoreBar label="Counterarguments" score={scores.counterargument} max={10} />
+      </div>
+      {hallucinationPenalty < 0 && (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          Hallucination penalty {hallucinationPenalty} for {speculativeClaimsCount} speculative claim
+          {speculativeClaimsCount === 1 ? "" : "s"}.
+        </div>
+      )}
+      <div className={`mt-3 pt-3 border-t border-border flex items-center justify-between`}>
+        <div>
+          <p className="text-xs text-muted-foreground">Weighted Score</p>
+          <p className="text-xs text-muted-foreground/70">Conviction × Evidence</p>
+        </div>
+        <span className={`text-xl font-bold tabular-nums ${agentColor}`}>
+          {weightedScore.toFixed(1)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function WeightedScoresPanel({ evidence }: { evidence: EvidenceAssessment }) {
+  const agents = [
+    { key: "bull", label: "🐂 Bull Analyst", weighted: evidence.bull_weighted, total: evidence.bull.total, color: "text-bull", bar: "bg-bull" },
+    { key: "bear", label: "🐻 Bear Analyst", weighted: evidence.bear_weighted, total: evidence.bear.total, color: "text-bear", bar: "bg-bear" },
+    { key: "strategist", label: "📊 Strategist", weighted: evidence.strategist_weighted, total: evidence.strategist.total, color: "text-strategist", bar: "bg-strategist" },
+  ] as const;
+
+  const maxWeighted = Math.max(evidence.bull_weighted, evidence.bear_weighted, evidence.strategist_weighted);
+
+  return (
+    <div className="mt-6 pt-6 border-t border-border">
+      <div className="flex items-center gap-2 mb-4">
+        <Trophy size={16} className="text-accent" />
+        <h4 className="text-sm font-semibold text-foreground">Evidence-Weighted Decision</h4>
+      </div>
+
+      <div className="space-y-3 mb-4">
+        {agents.map((a) => {
+          const isWinner = a.key === evidence.winner;
+          const barPct = maxWeighted > 0 ? (a.weighted / maxWeighted) * 100 : 0;
+          return (
+            <div key={a.key} className={`rounded-lg p-3 ${isWinner ? "bg-accent/8 border border-accent/20" : "bg-secondary/40"}`}>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-foreground">{a.label}</span>
+                  {isWinner && (
+                    <span className="text-xs font-semibold bg-accent text-white px-1.5 py-0.5 rounded-full">
+                      Winner
+                    </span>
+                  )}
+                </div>
+                <div className="text-right">
+                  <span className={`text-base font-bold tabular-nums ${a.color}`}>
+                    {a.weighted.toFixed(1)}
+                  </span>
+                  <span className="text-xs text-muted-foreground ml-1">
+                    ({a.total}/40 evidence)
+                  </span>
+                </div>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-secondary overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${a.bar} transition-all duration-700`}
+                  style={{ width: `${barPct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {evidence.winner_reasoning && (
+        <div className="text-xs text-muted-foreground leading-relaxed bg-secondary/40 rounded-lg p-3">
+          <span className="font-semibold text-foreground">Judge's rationale: </span>
+          {evidence.winner_reasoning}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Agent card sub-components (with evidence score accordion) ─────────────────
+
+function BullCard({
+  bull_analysis,
+  evidence,
+}: {
+  bull_analysis: BullAnalysis;
+  evidence: EvidenceAssessment | null;
+}) {
+  const [showEvidence, setShowEvidence] = useState(false);
+  const speculativeClaimsCount =
+    countSpeculativeClaims(bull_analysis.competitive_advantages) +
+    countSpeculativeClaims(bull_analysis.growth_catalysts);
+  const hallucinationPenalty = speculativeClaimsCount > 0 ? -20 : 0;
+  return (
+    <Card className="border-l-4 border-l-bull shadow-sm">
+      <CardContent className="p-6">
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-full bg-bull flex items-center justify-center">
+              <TrendingUp className="text-white" size={14} />
+            </div>
+            <span className="font-semibold text-foreground">Bull Analyst</span>
+          </div>
+          <span className="text-xs font-semibold bg-bull/10 text-bull px-2 py-1 rounded-full">
+            {bull_analysis.confidence}/10
+          </span>
+        </div>
+        <AnalystAbout role="bull" />
+        <div className="h-1 w-full rounded-full bg-secondary mb-5">
+          <div className="h-full rounded-full bg-bull" style={{ width: `${bull_analysis.confidence * 10}%` }} />
+        </div>
+        <p className="text-xs text-muted-foreground mb-1">Best Case Target</p>
+        <p className="text-2xl font-bold text-foreground mb-0.5 tabular-nums">
+          ${bull_analysis.best_case_target.toLocaleString()}
+        </p>
+        <p className="text-xs text-muted-foreground mb-5">{bull_analysis.best_case_timeline}</p>
+        <p className="text-sm font-semibold text-foreground mb-3">Key Advantages</p>
+        <ClaimList
+          claims={bull_analysis.competitive_advantages}
+          icon={<CheckCircle2 size={14} />}
+          iconColor="text-bull"
+        />
+        <p className="text-xs font-semibold text-foreground mt-5 mb-2">Growth Catalysts</p>
+        <ClaimList
+          claims={bull_analysis.growth_catalysts}
+          icon={<TrendingUp size={13} />}
+          iconColor="text-bull"
+        />
+        {bull_analysis.valuation_justification && (
+          <div className="mt-4 p-3 bg-bull/5 rounded-lg">
+            <p className="text-xs font-semibold text-foreground mb-1">Valuation Justification</p>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              {bull_analysis.valuation_justification}
+            </p>
+          </div>
+        )}
+        {evidence && (
+          <>
+            <button
+              onClick={() => setShowEvidence((v) => !v)}
+              className="mt-4 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <FlaskConical size={12} />
+              {showEvidence ? "Hide" : "Show"} evidence scores
+              {showEvidence ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+            {showEvidence && (
+              <EvidenceScoreCard
+                scores={evidence.bull}
+                weightedScore={evidence.bull_weighted}
+                agentColor="text-bull"
+                hallucinationPenalty={hallucinationPenalty}
+                speculativeClaimsCount={speculativeClaimsCount}
+              />
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function BearCard({
+  bear_analysis,
+  evidence,
+}: {
+  bear_analysis: BearAnalysis;
+  evidence: EvidenceAssessment | null;
+}) {
+  const [showEvidence, setShowEvidence] = useState(false);
+  const speculativeClaimsCount =
+    countSpeculativeClaims(bear_analysis.competition_threats) +
+    countSpeculativeClaims(bear_analysis.cyclical_risks);
+  const hallucinationPenalty = speculativeClaimsCount > 0 ? -20 : 0;
+  return (
+    <Card className="border-l-4 border-l-bear shadow-sm">
+      <CardContent className="p-6">
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-full bg-bear flex items-center justify-center">
+              <AlertTriangle className="text-white" size={14} />
+            </div>
+            <span className="font-semibold text-foreground">Bear Analyst</span>
+          </div>
+          <span className="text-xs font-semibold bg-bear/10 text-bear px-2 py-1 rounded-full">
+            {bear_analysis.confidence}/10
+          </span>
+        </div>
+        <AnalystAbout role="bear" />
+        <div className="h-1 w-full rounded-full bg-secondary mb-5">
+          <div className="h-full rounded-full bg-bear" style={{ width: `${bear_analysis.confidence * 10}%` }} />
+        </div>
+        <p className="text-xs text-muted-foreground mb-1">Worst Case Target</p>
+        <p className="text-2xl font-bold text-foreground mb-0.5 tabular-nums">
+          ${bear_analysis.worst_case_target.toLocaleString()}
+        </p>
+        <p className="text-xs text-muted-foreground mb-5">{bear_analysis.worst_case_timeline}</p>
+        <p className="text-sm font-semibold text-foreground mb-3">Key Risks</p>
+        <ClaimList
+          claims={bear_analysis.competition_threats}
+          icon={<AlertCircle size={14} />}
+          iconColor="text-bear"
+        />
+        <div className="mt-5 p-3 bg-secondary rounded-lg">
+          <p className="text-xs font-semibold text-foreground mb-1">Valuation Concerns</p>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {bear_analysis.valuation_concerns}
+          </p>
+        </div>
+        {bear_analysis.cyclical_risks.length > 0 && (
+          <div className="mt-4">
+            <p className="text-xs font-semibold text-foreground mb-2">Cyclical Risks</p>
+            <ClaimList
+              claims={bear_analysis.cyclical_risks}
+              icon={<AlertTriangle size={13} />}
+              iconColor="text-bear"
+            />
+          </div>
+        )}
+        {evidence && (
+          <>
+            <button
+              onClick={() => setShowEvidence((v) => !v)}
+              className="mt-4 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <FlaskConical size={12} />
+              {showEvidence ? "Hide" : "Show"} evidence scores
+              {showEvidence ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+            {showEvidence && (
+              <EvidenceScoreCard
+                scores={evidence.bear}
+                weightedScore={evidence.bear_weighted}
+                agentColor="text-bear"
+                hallucinationPenalty={hallucinationPenalty}
+                speculativeClaimsCount={speculativeClaimsCount}
+              />
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function StrategistCard({
+  strategist_analysis,
+  evidence,
+}: {
+  strategist_analysis: StrategistAnalysis;
+  evidence: EvidenceAssessment | null;
+}) {
+  const [showEvidence, setShowEvidence] = useState(false);
+  return (
+    <Card className="border-l-4 border-l-strategist shadow-sm">
+      <CardContent className="p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <div className="w-7 h-7 rounded-full bg-strategist flex items-center justify-center">
+            <Target className="text-white" size={14} />
+          </div>
+          <span className="font-semibold text-foreground">Portfolio Strategist</span>
+        </div>
+        <AnalystAbout role="strategist" />
+        <p className="text-xs text-muted-foreground mb-1">Current Exposure</p>
+        <p className="text-xl font-bold text-foreground mb-3">{strategist_analysis.current_exposure}</p>
+        <div className="flex items-center gap-2 mb-5">
+          <span className="text-xs text-muted-foreground">Concentration Risk:</span>
+          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${riskColor[strategist_analysis.concentration_risk] ?? "text-muted-foreground bg-secondary"}`}>
+            {strategist_analysis.concentration_risk}
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground mb-1">Recommended Allocation</p>
+        <p className="text-2xl font-bold text-foreground mb-1 tabular-nums">
+          ${strategist_analysis.recommended_allocation.toLocaleString()}
+        </p>
+        <p className="text-sm text-muted-foreground leading-relaxed mt-3">
+          {strategist_analysis.reasoning}
+        </p>
+        {strategist_analysis.alternative_options.length > 0 && (
+          <>
+            <p className="text-xs font-semibold text-foreground mt-4 mb-2">Alternatives</p>
+            <ul className="space-y-1">
+              {strategist_analysis.alternative_options.map((o, i) => (
+                <li key={i} className="text-xs text-muted-foreground">• {o}</li>
+              ))}
+            </ul>
+          </>
+        )}
+        {evidence && (
+          <>
+            <button
+              onClick={() => setShowEvidence((v) => !v)}
+              className="mt-4 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <FlaskConical size={12} />
+              {showEvidence ? "Hide" : "Show"} evidence scores
+              {showEvidence ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+            {showEvidence && (
+              <EvidenceScoreCard
+                scores={evidence.strategist}
+                weightedScore={evidence.strategist_weighted}
+                agentColor="text-strategist"
+              />
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 const Results = () => {
   const navigate = useNavigate();
   const { analysisResult, formData } = useAnalysis();
@@ -136,15 +549,20 @@ const Results = () => {
     bear_analysis,
     strategist_analysis,
     final_recommendation,
+    intent,
     market_data,
     traffic_light,
     portfolio_exposure,
   } = analysisResult;
 
+  const evidence = final_recommendation.evidence_assessment ?? null;
+
   const proposedAmount = formData.amount ? parseFloat(formData.amount.replace(/,/g, "")) : 0;
 
   const companyName = (market_data as Record<string, unknown>)?.longName as string | undefined;
   const currentPrice = (market_data as Record<string, unknown>)?.currentPrice as number | undefined;
+  const routedScenarios =
+    intent?.scenarios ?? final_recommendation.evaluated_scenarios.map((item) => item.scenario_name);
 
   const breakdownData = Object.entries(final_recommendation.confidence_breakdown).map(([k, v]) => ({
     name: k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
@@ -180,7 +598,7 @@ const Results = () => {
         {/* Stock header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-foreground">{ticker}</h1>
-          <p className="text-muted-foreground">
+          <p className="text-muted-foreground tabular-nums">
             {companyName ?? ""}
             {currentPrice != null ? ` · $${currentPrice.toLocaleString()}` : ""}
           </p>
@@ -199,6 +617,10 @@ const Results = () => {
           </div>
         )}
 
+        <div className="mb-6">
+          <DynamicIntentBadge scenarios={routedScenarios} />
+        </div>
+
         {/* ── Final Recommendation — shown FIRST ──────────────────────────── */}
         <Card className="border-l-4 border-l-accent shadow-sm mb-8">
           <CardContent className="p-6">
@@ -207,7 +629,20 @@ const Results = () => {
                 <Scale className="text-accent" size={20} />
                 <h3 className="text-lg font-semibold text-foreground">Final Recommendation</h3>
               </div>
-              <span className="text-3xl font-bold text-accent">{final_recommendation.confidence_overall}%</span>
+              <div className="flex items-center gap-3">
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
+                  final_recommendation.traffic_light_color === "green"
+                    ? "bg-emerald-100 text-emerald-700"
+                    : final_recommendation.traffic_light_color === "yellow"
+                      ? "bg-amber-100 text-amber-700"
+                      : "bg-rose-100 text-rose-700"
+                }`}>
+                  {final_recommendation.traffic_light_color}
+                </span>
+                <span className="text-3xl font-bold text-accent tabular-nums">
+                  {final_recommendation.confidence_overall}%
+                </span>
+              </div>
             </div>
             <p className="text-sm text-muted-foreground leading-relaxed mb-6">{final_recommendation.reasoning}</p>
 
@@ -221,7 +656,7 @@ const Results = () => {
               ].map((m) => (
                 <div key={m.label} className="rounded-lg border border-border p-3 text-center">
                   <p className="text-xs text-muted-foreground mb-1">{m.label}</p>
-                  <p className={`text-sm font-bold ${m.accent ? "text-bull" : "text-foreground"}`}>{m.value}</p>
+                  <p className={`text-sm font-bold ${m.accent ? "text-bull" : "text-foreground"} ${m.label === "Amount" ? "tabular-nums" : ""}`}>{m.value}</p>
                 </div>
               ))}
             </div>
@@ -243,7 +678,7 @@ const Results = () => {
                 <div key={d.name}>
                   <div className="flex justify-between text-xs mb-1">
                     <span className="text-muted-foreground">{d.name}</span>
-                    <span className="font-medium text-foreground">{d.value}%</span>
+                    <span className="font-medium text-foreground tabular-nums">{d.value}%</span>
                   </div>
                   <div className="h-1.5 w-full rounded-full bg-secondary">
                     <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${d.value}%` }} />
@@ -251,6 +686,9 @@ const Results = () => {
                 </div>
               ))}
             </div>
+
+            {/* Evidence-Weighted Decision Panel */}
+            {evidence && <WeightedScoresPanel evidence={evidence} />}
           </CardContent>
         </Card>
 
@@ -265,135 +703,25 @@ const Results = () => {
           </div>
         )}
 
+        {final_recommendation.evaluated_scenarios.length > 0 && (
+          <div className="mb-8">
+            <EvaluatedScenariosMatrix scenarios={final_recommendation.evaluated_scenarios} />
+          </div>
+        )}
+
         {/* ── Agent Cards with role descriptions ───────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-8">
           {/* Bull */}
-          <Card className="border-l-4 border-l-bull shadow-sm">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between mb-1">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-full bg-bull flex items-center justify-center">
-                    <TrendingUp className="text-white" size={14} />
-                  </div>
-                  <span className="font-semibold text-foreground">Bull Analyst</span>
-                </div>
-                <span className="text-xs font-semibold bg-bull/10 text-bull px-2 py-1 rounded-full">
-                  {bull_analysis.confidence}/10
-                </span>
-              </div>
-              <AnalystAbout role="bull" />
-              <div className="h-1 w-full rounded-full bg-secondary mb-5">
-                <div className="h-full rounded-full bg-bull" style={{ width: `${bull_analysis.confidence * 10}%` }} />
-              </div>
-              <p className="text-xs text-muted-foreground mb-1">Best Case Target</p>
-              <p className="text-2xl font-bold text-foreground mb-0.5">
-                ${bull_analysis.best_case_target.toLocaleString()}
-              </p>
-              <p className="text-xs text-muted-foreground mb-5">{bull_analysis.best_case_timeline}</p>
-              <p className="text-sm font-semibold text-foreground mb-3">Key Advantages</p>
-              <ul className="space-y-2">
-                {bull_analysis.competitive_advantages.map((a, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
-                    <CheckCircle2 className="text-bull shrink-0 mt-0.5" size={14} />
-                    {a}
-                  </li>
-                ))}
-              </ul>
-              <p className="text-xs font-semibold text-foreground mt-5 mb-2">Growth Catalysts</p>
-              <ul className="space-y-1">
-                {bull_analysis.growth_catalysts.map((c, i) => (
-                  <li key={i} className="text-xs text-muted-foreground">• {c}</li>
-                ))}
-              </ul>
-              {bull_analysis.valuation_justification && (
-                <div className="mt-4 p-3 bg-bull/5 rounded-lg">
-                  <p className="text-xs font-semibold text-foreground mb-1">Valuation Justification</p>
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    {bull_analysis.valuation_justification}
-                  </p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <BullCard
+            bull_analysis={bull_analysis}
+            evidence={evidence}
+          />
 
           {/* Bear */}
-          <Card className="border-l-4 border-l-bear shadow-sm">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between mb-1">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-full bg-bear flex items-center justify-center">
-                    <AlertTriangle className="text-white" size={14} />
-                  </div>
-                  <span className="font-semibold text-foreground">Bear Analyst</span>
-                </div>
-                <span className="text-xs font-semibold bg-bear/10 text-bear px-2 py-1 rounded-full">
-                  {bear_analysis.confidence}/10
-                </span>
-              </div>
-              <AnalystAbout role="bear" />
-              <div className="h-1 w-full rounded-full bg-secondary mb-5">
-                <div className="h-full rounded-full bg-bear" style={{ width: `${bear_analysis.confidence * 10}%` }} />
-              </div>
-              <p className="text-xs text-muted-foreground mb-1">Worst Case Target</p>
-              <p className="text-2xl font-bold text-foreground mb-0.5">
-                ${bear_analysis.worst_case_target.toLocaleString()}
-              </p>
-              <p className="text-xs text-muted-foreground mb-5">{bear_analysis.worst_case_timeline}</p>
-              <p className="text-sm font-semibold text-foreground mb-3">Key Risks</p>
-              <ul className="space-y-2">
-                {bear_analysis.competition_threats.map((r, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
-                    <AlertCircle className="text-bear shrink-0 mt-0.5" size={14} />
-                    {r}
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-5 p-3 bg-secondary rounded-lg">
-                <p className="text-xs font-semibold text-foreground mb-1">Valuation Concerns</p>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {bear_analysis.valuation_concerns}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          <BearCard bear_analysis={bear_analysis} evidence={evidence} />
 
           {/* Strategist */}
-          <Card className="border-l-4 border-l-strategist shadow-sm">
-            <CardContent className="p-6">
-              <div className="flex items-center gap-2 mb-1">
-                <div className="w-7 h-7 rounded-full bg-strategist flex items-center justify-center">
-                  <Target className="text-white" size={14} />
-                </div>
-                <span className="font-semibold text-foreground">Portfolio Strategist</span>
-              </div>
-              <AnalystAbout role="strategist" />
-              <p className="text-xs text-muted-foreground mb-1">Current Exposure</p>
-              <p className="text-xl font-bold text-foreground mb-3">{strategist_analysis.current_exposure}</p>
-              <div className="flex items-center gap-2 mb-5">
-                <span className="text-xs text-muted-foreground">Concentration Risk:</span>
-                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${riskColor[strategist_analysis.concentration_risk] ?? "text-muted-foreground bg-secondary"}`}>
-                  {strategist_analysis.concentration_risk}
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground mb-1">Recommended Allocation</p>
-              <p className="text-2xl font-bold text-foreground mb-1">
-                ${strategist_analysis.recommended_allocation.toLocaleString()}
-              </p>
-              <p className="text-sm text-muted-foreground leading-relaxed mt-3">
-                {strategist_analysis.reasoning}
-              </p>
-              {strategist_analysis.alternative_options.length > 0 && (
-                <>
-                  <p className="text-xs font-semibold text-foreground mt-4 mb-2">Alternatives</p>
-                  <ul className="space-y-1">
-                    {strategist_analysis.alternative_options.map((o, i) => (
-                      <li key={i} className="text-xs text-muted-foreground">• {o}</li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </CardContent>
-          </Card>
+          <StrategistCard strategist_analysis={strategist_analysis} evidence={evidence} />
         </div>
 
         {/* ── Confidence Chart ─────────────────────────────────────────────── */}

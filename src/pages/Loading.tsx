@@ -118,6 +118,7 @@ const Loading = () => {
         portfolio: { total_value: portfolioValue },
         risk_tolerance: formData.riskTolerance,
         time_horizon: formData.timeHorizon,
+        user_query: formData.userQuery || undefined,
         analysis_action: analysisAction,
         portfolio_holdings: portfolioHoldings ?? undefined,
       });

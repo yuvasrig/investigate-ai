@@ -32,6 +32,23 @@ interface Portfolio {
   growth_history?: GrowthPoint[];
 }
 
+const QUERY_STOPWORDS = new Set([
+  "A", "AN", "AND", "ARE", "BE", "BUY", "FOR", "HOLD", "I", "IF", "IN",
+  "IS", "IT", "ME", "MY", "OF", "ON", "OR", "SELL", "SHOULD", "THE", "TO",
+  "WE", "WHAT", "WHY", "WITH", "YOU",
+]);
+
+function extractTickerFromText(input: string): string {
+  const tokens = input.match(/\b[A-Za-z]{1,5}\b/g) ?? [];
+  for (const token of tokens) {
+    const normalized = token.toUpperCase();
+    if (!QUERY_STOPWORDS.has(normalized)) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
 // ── Mini portfolio sparkline ────────────────────────────────────────────────
 function PortfolioChart({ data, positive }: { data: GrowthPoint[]; positive: boolean }) {
   const color = positive ? "#22c55e" : "#ef4444";
@@ -139,7 +156,7 @@ export default function Landing() {
 
   // Custom ticker panel
   const [showSearch, setShowSearch] = useState(false);
-  const [searchTicker, setSearchTicker] = useState("");
+  const [searchInput, setSearchInput] = useState("");
 
   // Analysis params
   const [amount, setAmount] = useState("5000");
@@ -187,6 +204,7 @@ export default function Landing() {
       portfolio: String(portfolioValue),
       riskTolerance,
       timeHorizon,
+      userQuery: `Should I hold ${ticker}?`,
     });
     setAnalysisAction("hold"); // default to "hold" for existing positions
     navigate("/loading");
@@ -206,12 +224,17 @@ export default function Landing() {
 
   const handleInvestigate = (ticker: string, isSearch = false) => {
     const portfolioValue = portfolio?.total_value ?? 80000;
+    const resolvedTicker = isSearch ? extractTickerFromText(searchInput) : ticker;
+    const userQuery = isSearch
+      ? searchInput.trim()
+      : `Should I ${selectedAction} ${ticker}?`;
     setFormData({
-      ticker: isSearch ? searchTicker.trim().toUpperCase() : ticker,
+      ticker: resolvedTicker,
       amount,
       portfolio: String(portfolioValue),
       riskTolerance,
       timeHorizon,
+      userQuery,
     });
     setAnalysisAction(selectedAction);
     navigate("/loading");
@@ -231,9 +254,8 @@ export default function Landing() {
     rec.lang = "en-US";
     rec.onresult = (e) => {
       const text = e.results[0][0].transcript;
-      const m = text.match(/\b([A-Z]{1,5})\b/);
       const a = text.match(/\$?([\d,]+)/);
-      if (m) setSearchTicker(m[1]);
+      setSearchInput(text);
       if (a) setAmount(a[1].replace(/,/g, ""));
     };
     rec.onend = () => setListening(false);
@@ -253,6 +275,7 @@ export default function Landing() {
     ? portfolio.holdings.reduce((sum, h) => sum + (h.cost_basis ?? h.value), 0)
     : 0;
   const totalGainPct = totalCost > 0 ? (totalGain / totalCost) * 100 : 0;
+  const parsedSearchTicker = extractTickerFromText(searchInput);
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col">
@@ -353,10 +376,10 @@ export default function Landing() {
                 <input
                   autoFocus
                   type="text"
-                  value={searchTicker}
-                  onChange={(e) => setSearchTicker(e.target.value.toUpperCase())}
-                  placeholder="NVDA, AAPL, BTC-USD…"
-                  className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none font-mono"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  placeholder="Should I buy NVDA? I'm worried about Taiwan."
+                  className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none"
                 />
                 <button
                   onClick={toggleVoice}
@@ -370,8 +393,13 @@ export default function Landing() {
               </div>
 
               {/* Action + params for search */}
-              {searchTicker.length >= 1 && (
+              {searchInput.trim().length >= 1 && (
                 <div className="p-4 space-y-4">
+                  {parsedSearchTicker && (
+                    <div className="rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
+                      Intent router target asset: <span className="font-semibold tabular-nums">{parsedSearchTicker}</span>
+                    </div>
+                  )}
                   {/* Action selector */}
                   <div className="grid grid-cols-3 gap-2">
                     {(Object.keys(ACTION_CONFIG) as AnalysisAction[]).map((a) => {
@@ -402,12 +430,12 @@ export default function Landing() {
                     setTimeHorizon={setTimeHorizon}
                   />
                   <button
-                    onClick={() => handleInvestigate(searchTicker, true)}
-                    disabled={!searchTicker.trim()}
+                    onClick={() => handleInvestigate(parsedSearchTicker, true)}
+                    disabled={!parsedSearchTicker}
                     className={`w-full py-3 rounded-xl font-bold text-sm text-white transition-all active:scale-[0.98] disabled:opacity-40 ${ACTION_CONFIG[selectedAction].bg
                       }`}
                   >
-                    Investigate {searchTicker} — {ACTION_CONFIG[selectedAction].label} →
+                    Investigate {parsedSearchTicker || "query"} — {ACTION_CONFIG[selectedAction].label} →
                   </button>
                 </div>
               )}
@@ -566,7 +594,7 @@ export default function Landing() {
                   </div>
                 );
               })}
-            </div>
+            </motion.div>
           ) : (
             <p className="text-sm text-gray-500 text-center py-8">
               Could not load portfolio.

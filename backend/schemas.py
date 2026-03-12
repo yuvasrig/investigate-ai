@@ -28,12 +28,16 @@ def _coerce_money_like_number(value):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Agent output schemas
+# Verified Claim & Agent output schemas
 # ══════════════════════════════════════════════════════════════════════════════
 
+class VerifiedClaim(BaseModel):
+    claim: str = Field(description="The analytical claim or data point")
+    is_speculative: bool = Field(description="True if the claim lacks concrete verification from 10-K or grounding data")
+
 class BullAnalysis(BaseModel):
-    competitive_advantages: list[str] = Field(description="Key competitive moats and advantages")
-    growth_catalysts: list[str] = Field(description="Key drivers of future growth")
+    competitive_advantages: list[VerifiedClaim] = Field(description="Key competitive moats and advantages")
+    growth_catalysts: list[VerifiedClaim] = Field(description="Key drivers of future growth")
     valuation_justification: str = Field(description="Why the current valuation is justified")
     best_case_target: float = Field(description="Best case price target in USD")
     best_case_timeline: str = Field(description="Timeline for best case (e.g. '3 years')")
@@ -42,9 +46,9 @@ class BullAnalysis(BaseModel):
 
 
 class BearAnalysis(BaseModel):
-    competition_threats: list[str] = Field(description="Key competitive threats and risks")
+    competition_threats: list[VerifiedClaim] = Field(description="Key competitive threats and risks")
     valuation_concerns: str = Field(description="Summary of valuation concerns")
-    cyclical_risks: list[str] = Field(description="Cyclical, macro, and regulatory risks")
+    cyclical_risks: list[VerifiedClaim] = Field(description="Cyclical, macro, and regulatory risks")
     worst_case_target: float = Field(description="Worst case price target in USD")
     worst_case_timeline: str = Field(description="Timeline for worst case scenario")
     confidence: int = Field(ge=0, le=10, description="Confidence score 0-10")
@@ -101,6 +105,33 @@ class ConfidenceBreakdown(BaseModel):
     execution_clarity: int = Field(ge=0, le=100)
 
 
+# ── Evidence-Based Scoring ─────────────────────────────────────────────────────
+
+class AgentEvidenceScore(BaseModel):
+    """Evidence quality scores for a single analyst (0-10 each, max 40 total)."""
+    data_citations: int = Field(ge=0, le=10, description="Data Citations quality (0-10): specificity and sourcing of data points")
+    calculation_rigor: int = Field(ge=0, le=10, description="Calculation Rigor (0-10): shows valuation methodology and work")
+    historical_precedent: int = Field(ge=0, le=10, description="Historical Precedent (0-10): specific comparables with dates and numbers")
+    counterargument: int = Field(ge=0, le=10, description="Counterargument Strength (0-10): acknowledges and addresses opposing views")
+    total: int = Field(ge=0, le=40, description="Sum of all four dimension scores (max 40)")
+
+
+class EvidenceAssessment(BaseModel):
+    """Evidence quality evaluation of all three analysts with weighted decision scoring."""
+    bull: AgentEvidenceScore = Field(description="Bull analyst evidence quality breakdown")
+    bear: AgentEvidenceScore = Field(description="Bear analyst evidence quality breakdown")
+    strategist: AgentEvidenceScore = Field(description="Portfolio Strategist evidence quality breakdown")
+    bull_weighted: float = Field(description="Bull conviction × (bull_evidence / 40)")
+    bear_weighted: float = Field(description="Bear conviction × (bear_evidence / 40)")
+    strategist_weighted: float = Field(description="Strategist conviction × (strategist_evidence / 40)")
+    winner: str = Field(description="Agent with highest weighted score: 'bull', 'bear', or 'strategist'")
+    winner_reasoning: str = Field(description="Brief explanation of why the winner's evidence-weighted case is strongest")
+
+
+class EvaluatedScenario(BaseModel):
+    scenario_name: str = Field(description="Name of the scenario evaluated (from Intent Router)")
+    verified_analog_used: str = Field(description="Historical event or comparable used from RAG to justify the scenario outcome")
+
 class JudgeRecommendation(BaseModel):
     action: str = Field(description="Investment action: buy, hold, or sell")
     recommended_amount: float = Field(ge=0, description="Recommended dollar amount")
@@ -109,7 +140,13 @@ class JudgeRecommendation(BaseModel):
     confidence_breakdown: ConfidenceBreakdown = Field(description="5-dimensional confidence breakdown")
     entry_strategy: str = Field(description="How to enter the position")
     risk_management: str = Field(description="Risk management guidance")
+    traffic_light_color: Literal["red", "yellow", "green"] = Field(description="Red if any stress scenario correlates with >2sigma drawdown, else based on overall consensus")
+    evaluated_scenarios: list[EvaluatedScenario] = Field(default_factory=list, description="List of scenarios that the Judge evaluated")
     key_factors: list[str] = Field(description="Key decision factors")
+    evidence_assessment: Optional[EvidenceAssessment] = Field(
+        default=None,
+        description="Evidence quality scoring for all three analysts with evidence-weighted decision"
+    )
 
     @field_validator("recommended_amount", mode="before")
     @classmethod
@@ -118,8 +155,32 @@ class JudgeRecommendation(BaseModel):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Portfolio / request schemas
+# Intent Router & Multi-Tier Schemas
 # ══════════════════════════════════════════════════════════════════════════════
+
+class IntentRouterResult(BaseModel):
+    target_asset: Optional[str] = Field(description="The primary ticker or asset in question, if any")
+    scenarios: list[str] = Field(description="Array of RAG macro fear scenarios mapped from the intent (e.g. ['Geopolitical Escalation: Pacific Rim'])")
+    requires_deep_dive: bool = Field(description="True if the user intent requires the 4-agent deep dive, false if it's just general info")
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Portfolio / request schemas & Tier 1 Scan
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PositionType(BaseModel):
+    ticker: str = Field(description="The asset ticker")
+    category: Literal["Long-Term Core", "Growth Position", "Speculative", "Income", "Cash"] = Field(description="Classification of the holding")
+    weight_pct: float = Field(description="Percentage weight in portfolio")
+    is_flagged: bool = Field(default=False, description="True if position poses concentration risk")
+
+class Tier1ScanResult(BaseModel):
+    overall_risk_score: int = Field(ge=0, le=10, description="0-10 risk score (10 = highest risk)")
+    missing_protections: list[str] = Field(description="Missing diversifiers (e.g. '0% bonds', 'No international exposure')")
+    positions: list[PositionType] = Field(description="Categorized portfolio holdings")
+    concentration_warning: Optional[str] = Field(default=None, description="Warning if any single asset or sector is too concentrated")
+
 
 class PortfolioHolding(BaseModel):
     ticker: str = Field(description="ETF or stock ticker (e.g. SPY, QQQ)")
@@ -136,6 +197,10 @@ class AnalysisRequest(BaseModel):
     portfolio: dict = Field(description="Portfolio info with total_value key")
     risk_tolerance: str = Field(description="Risk tolerance: conservative, moderate, aggressive")
     time_horizon: str = Field(description="Investment time horizon (e.g. '1Y', '3Y', '5Y')")
+    user_query: Optional[str] = Field(
+        default=None,
+        description="Optional natural-language query used by the Tier 2 intent router",
+    )
     analysis_action: Literal["buy", "sell", "hold"] = Field(
         default="buy",
         description="Action to debate: buy (buy more), sell (exit position), hold (maintain position)"
@@ -176,6 +241,7 @@ class AnalysisResponse(BaseModel):
     bear_analysis: BearAnalysis
     strategist_analysis: StrategistAnalysis
     final_recommendation: JudgeRecommendation
+    intent: Optional[IntentRouterResult] = None
     market_data: Optional[dict] = None
     rag_summary: Optional[dict] = None
     traffic_light: Optional[TrafficLightResult] = None

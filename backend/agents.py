@@ -178,7 +178,17 @@ Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper 
   },
   "entry_strategy": "string",
   "risk_management": "string",
-  "key_factors": ["string", ...]
+  "key_factors": ["string", ...],
+  "evidence_assessment": {
+    "bull": {"data_citations": <0-10>, "calculation_rigor": <0-10>, "historical_precedent": <0-10>, "counterargument": <0-10>, "total": <0-40>},
+    "bear": {"data_citations": <0-10>, "calculation_rigor": <0-10>, "historical_precedent": <0-10>, "counterargument": <0-10>, "total": <0-40>},
+    "strategist": {"data_citations": <0-10>, "calculation_rigor": <0-10>, "historical_precedent": <0-10>, "counterargument": <0-10>, "total": <0-40>},
+    "bull_weighted": <number>,
+    "bear_weighted": <number>,
+    "strategist_weighted": <number>,
+    "winner": "bull" | "bear" | "strategist",
+    "winner_reasoning": "string"
+  }
 }"""
 
 
@@ -312,7 +322,10 @@ def run_strategist_agent(
 
 # ── Judge Agent ───────────────────────────────────────────────────────────────
 
-_JUDGE_BODY = """You are the INVESTMENT JUDGE for {ticker}.
+_JUDGE_BODY = """You are the CHIEF INVESTMENT OFFICER making the final decision on {ticker}.
+
+Your role: Evaluate argument QUALITY alongside conviction levels — strong opinions backed by
+weak evidence get downweighted; rigorous, data-driven arguments earn more influence.
 
 ━━━ LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {market_context}
@@ -326,15 +339,57 @@ _JUDGE_BODY = """You are the INVESTMENT JUDGE for {ticker}.
 ━━━ PORTFOLIO STRATEGIST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {strategist_analysis}
 
-Synthesise the three reports into a final investment decision:
+━━━ EVIDENCE EVALUATION FRAMEWORK ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Score each analyst on these 4 dimensions (0-10 each, max 40 total):
+
+1. DATA CITATIONS (0-10)
+   10 = Multiple specific figures with attribution (e.g. "$47B TTM revenue per Q3 10-K", "75% GM per earnings call")
+    7 = Some data points but attribution missing (e.g. "revenue growing rapidly")
+    4 = Vague claims only (e.g. "strong growth", "high margins")
+    0 = Pure opinion, zero data
+
+2. CALCULATION RIGOR (0-10)
+   10 = Shows full methodology (DCF with WACC breakdown, margin sensitivity table)
+    7 = Mentions methodology without details (e.g. "my DCF supports this")
+    4 = States conclusion only (e.g. "fair value is $165")
+    0 = No valuation methodology at all
+
+3. HISTORICAL PRECEDENT (0-10)
+   10 = Specific named comparables with dates and numbers (e.g. "In 2018 cycle, GM compressed 65%→58% over 18 months")
+    7 = Generic historical references (e.g. "historically margins mean-revert")
+    4 = Vague (e.g. "past performance suggests...")
+    0 = No historical context whatsoever
+
+4. COUNTERARGUMENT STRENGTH (0-10)
+   10 = Explicitly identifies and addresses the opposing view (e.g. "Bull's CUDA moat point is valid, but...")
+    7 = Briefly acknowledges the other side
+    4 = Largely ignores opposing arguments
+    0 = Purely one-sided, no acknowledgement of opposing view
+
+WEIGHTED DECISION FORMULA:
+  Weighted_Score = Conviction(0-10) × (Evidence_Total / 40)
+  → The analyst with the HIGHEST weighted score anchors your recommendation.
+  → High conviction + poor evidence = heavily discounted
+  → Strong evidence can elevate a moderate conviction over a louder but weaker argument
+
+Example:
+  Bull: conviction 8, evidence 35/40 → weighted = 8 × 0.875 = 7.0
+  Bear: conviction 7, evidence 20/40 → weighted = 7 × 0.500 = 3.5
+  → Bull wins despite similar conviction gap because evidence is substantially stronger
+
+━━━ OUTPUT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Produce your final decision with ALL of these fields:
 1. action: buy / hold / sell
 2. recommended_amount ≤ strategist's recommended_allocation
-3. reasoning: why you chose this action
+3. reasoning: synthesise the three reports; explicitly reference which analyst's evidence quality drove the decision
 4. confidence_overall: 0-100
-5. confidence_breakdown (5 dimensions, 0-100 each)
-6. entry_strategy: e.g. "DCA $X/month for 3 months"
-7. risk_management: e.g. "stop-loss at $Y"
-8. key_factors: top decision factors (list of strings){schema_hint}"""
+5. confidence_breakdown (5 dimensions: growth_potential, risk_level, portfolio_fit, timing, execution_clarity)
+6. entry_strategy (e.g. "DCA $X/month for 3 months")
+7. risk_management (e.g. "stop-loss at $Y, revisit if thesis changes")
+8. key_factors: 3-5 top decision factors as a list
+9. evidence_assessment: score all three analysts on the 4 dimensions, compute weighted scores, identify the winner{schema_hint}"""
 
 
 def _condense_bull(bull: BullAnalysis) -> str:

@@ -182,6 +182,65 @@ def fetch_competitive_threats(ticker: str, market_data: dict) -> str:
     return " | ".join([(n.get("title") or "") for n in news[:3]]) or "No recent headlines."
 
 
+# ── Earnings highlights (for Bull agent) ──────────────────────────────────────
+
+def fetch_earnings_highlights(ticker: str, market_data: dict) -> str:
+    """
+    Pull recent earnings-related headlines for the Bull agent to cite.
+
+    Strategy (in order of availability):
+      1. Filter market_data news for earnings / revenue / guidance keywords.
+      2. Supplement with yfinance news if market_data has fewer than 2 hits.
+      3. Fall back to analyst consensus from market_data fields.
+
+    Returns a plain-text string ready to be embedded in the Bull prompt.
+    """
+    earnings_keywords = [
+        "earnings", "revenue", "beat", "guidance", "forecast", "outlook",
+        "quarter", "eps", "profit", "sales", "margin", "raised", "raised guidance",
+        "record", "growth", "results", "reported", "exceeds", "surpasses",
+    ]
+
+    hits: list[str] = []
+
+    # 1. Scan market_data news
+    news = market_data.get("recent_news") or []
+    for item in news:
+        title = (item.get("title") or "").strip()
+        if any(k in title.lower() for k in earnings_keywords):
+            hits.append(title)
+
+    # 2. Supplement with raw yfinance news if thin coverage
+    if len(hits) < 2:
+        try:
+            extra_news = yf.Ticker(ticker).news or []
+            for item in extra_news[:10]:
+                title = (item.get("title") or "").strip()
+                if title and title not in hits and any(k in title.lower() for k in earnings_keywords):
+                    hits.append(title)
+                if len(hits) >= 5:
+                    break
+        except Exception:
+            pass
+
+    if hits:
+        return " | ".join(hits[:5])
+
+    # 3. Graceful fallback: synthesise from analyst consensus fields
+    n_analysts = int(market_data.get("numberOfAnalystOpinions") or 0)
+    mean_target = market_data.get("targetMeanPrice") or 0
+    rec_key = (market_data.get("recommendationKey") or "N/A").upper()
+    rev_growth = (market_data.get("revenueGrowth") or 0) * 100
+    earn_growth = (market_data.get("earningsGrowth") or 0) * 100
+
+    return (
+        f"Analyst consensus ({n_analysts} analysts): {rec_key}, "
+        f"mean target ${mean_target:.2f}. "
+        f"Revenue growth {rev_growth:+.1f}% YoY, earnings growth {earn_growth:+.1f}% YoY. "
+        "No specific earnings headlines available."
+    )
+
+
 # ── Portfolio metrics ──────────────────────────────────────────────────────────
 
 ETF_WEIGHTS: dict[str, dict[str, float]] = {

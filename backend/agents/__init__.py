@@ -28,6 +28,7 @@ from agents.data_fetcher import (
     fetch_historical_patterns,
     fetch_competitive_threats,
     fetch_portfolio_metrics,
+    fetch_earnings_highlights,
 )
 
 T = TypeVar("T")
@@ -130,8 +131,13 @@ Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper 
   "concentration_explanation": "string",
   "recommended_allocation": <number>,
   "reasoning": "string",
-  "alternative_options": ["string", ...]
-}"""
+  "alternative_options": ["plain text string describing one alternative", ...]
+}
+
+IMPORTANT: alternative_options must be a list of PLAIN TEXT STRINGS only.
+WRONG:  "alternative_options": [{"ticker": "VWO", "amount": "$20"}]
+CORRECT: "alternative_options": ["Consider VWO (Vanguard Emerging Markets ETF) as a diversified alternative"]
+Each element must be a single human-readable sentence, NOT an object or dict."""
 
 _JUDGE_SKELETON = """\
 Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper keys):
@@ -203,11 +209,13 @@ def run_bull_agent(
     rag_context: str = "",
     amount: float = 0,
     portfolio_value: float = 0,
+    analysis_action: str = "buy",
 ) -> BullAnalysis:
     """Professional bull analyst with peer comparisons and institutional-grade prompts."""
 
     peer_data    = fetch_peer_data(ticker)
     peers_text   = _format_peers(peer_data)
+    earnings_txt = fetch_earnings_highlights(ticker, market_data)
 
     price        = _md(market_data, "currentPrice", "current_price")
     fwd_pe       = _md(market_data, "forwardPE",    "forward_pe")
@@ -238,13 +246,31 @@ def run_bull_agent(
     fwd_eps      = _md(market_data, "forwardEps")
     proposed_pct = (amount / portfolio_value * 100) if portfolio_value > 0 else 0
 
+    # ── Action-specific framing ───────────────────────────────────────────────
+    if analysis_action == "sell":
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ The investor is considering SELLING their {ticker} position.
+  Your role: Argue AGAINST selling — make the strongest case that the bull thesis is still alive
+  and the investor should HOLD or ADD to the position rather than sell.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        task_line = f"Write the STRONGEST case for why the investor should NOT sell {ticker} — upside remains."
+    elif analysis_action == "hold":
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ The investor is deciding whether to HOLD or exit their {ticker} position.
+  Your role: Argue FOR HOLDING — the long-term investment thesis remains compelling.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        task_line = f"Write the STRONGEST case for why the investor should HOLD {ticker} long-term."
+    else:  # buy
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ The investor is considering BUYING ${amount:,.0f} of {ticker} ({proposed_pct:.1f}% of ${portfolio_value:,.0f} portfolio).
+  Your role: Argue FOR buying — make the strongest bull case.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        task_line = f"Write the STRONGEST possible bull case for {ticker}."
+
     prompt = f"""You are a Managing Director — Senior Equity Analyst at a top-tier hedge fund ($50B AUM).
 Your investment memos have generated $2B+ in alpha over 10 years.
 
-Write a professional BULL THESIS for {ticker}.
-
-━━━ CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Proposed trade: Buy ${amount:,.0f} of {ticker} ({proposed_pct:.1f}% of ${portfolio_value:,.0f} portfolio)
+{action_header}
 
 ━━━ LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VALUATION:
@@ -268,6 +294,9 @@ BALANCE SHEET & CASH FLOW:
 ANALYST CONSENSUS ({n_analysts} analysts):
 • Mean Target: ${tgt_mean:.2f}  |  Range: ${tgt_lo:.2f}–${tgt_hi:.2f}  |  Rating: {rec_key}
 
+━━━ RECENT EARNINGS & GUIDANCE HIGHLIGHTS ━━━━━━━━━━━━━━━━
+{earnings_txt}
+
 ━━━ SEC FILINGS & NEWS (RAG) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {rag_context or _NO_RAG}
 
@@ -276,7 +305,7 @@ ANALYST CONSENSUS ({n_analysts} analysts):
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-YOUR TASK: Write the STRONGEST possible bull case for {ticker}.
+YOUR TASK: {task_line}
 
 ANALYSIS REQUIREMENTS:
 1. Investment thesis (2-3 sentences: expected return, timeline, key catalyst)
@@ -287,6 +316,7 @@ ANALYSIS REQUIREMENTS:
 6. Conviction 0-10: cite data quality, thesis clarity, risk/reward ratio, catalyst visibility
 
 Use specific numbers. Cite sources ("per management guidance", "SEC 10-K", "consensus estimate").
+Cite recent earnings headlines above when relevant.
 Goldman Sachs equity research quality. Dense, professional, data-driven.{_schema_hint(_BULL_SKELETON)}"""
 
     return _invoke(get_analyst_llm(), BullAnalysis, prompt)
@@ -302,6 +332,7 @@ def run_bear_agent(
     rag_context: str = "",
     amount: float = 0,
     portfolio_value: float = 0,
+    analysis_action: str = "buy",
 ) -> BearAnalysis:
     """Professional bear analyst with historical pattern analysis and competitive threats."""
 
@@ -328,11 +359,31 @@ def run_bear_agent(
         f"Annualised Vol: {hist.get('volatility_annualised_pct',0):.1f}%"
     ) if hist else "[Historical data unavailable]"
 
+    # ── Action-specific framing ───────────────────────────────────────────────
+    if analysis_action == "sell":
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ The investor is considering SELLING their {ticker} position.
+  Your role: Argue FOR SELLING — make the strongest case that now is the right time to exit.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        task_line = f"Write the STRONGEST case for why the investor should SELL {ticker} now."
+    elif analysis_action == "hold":
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ The investor is deciding whether to HOLD or exit their {ticker} position.
+  Your role: Argue AGAINST holding — make the case for REDUCING or EXITING the position.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        task_line = f"Write the STRONGEST case for why the investor should EXIT or REDUCE {ticker}."
+    else:  # buy
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ The investor is considering BUYING {ticker}.
+  Your role: Argue AGAINST buying — make the strongest bear case.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        task_line = f"Write the most DEVASTATING possible bear case for {ticker}."
+
     prompt = f"""You are a veteran Short Seller with a 20-year track record at a top hedge fund.
 You've successfully called: Dot-com bubble (2000), Housing crisis (2008), Crypto winter (2022).
 Your job: Find flaws in the bull thesis. Be the voice of rigorous, evidence-based skepticism.
 
-Write a professional BEAR THESIS for {ticker}.
+{action_header}
 
 ━━━ LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Current Price:      ${price:.2f}
@@ -356,6 +407,8 @@ Write a professional BEAR THESIS for {ticker}.
 {peers_text}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+YOUR TASK: {task_line}
 
 ANALYSIS REQUIREMENTS:
 1. Counter-thesis (2-3 sentences: core bear case, expected downside, catalyst for decline)
@@ -386,6 +439,7 @@ def run_strategist_agent(
     market_data: dict,
     rag_context: str = "",
     portfolio_holdings: list | None = None,
+    analysis_action: str = "buy",
 ) -> StrategistAnalysis:
     """Professional portfolio strategist with full concentration, correlation and rebalancing analysis."""
 
@@ -434,10 +488,31 @@ CORRELATION:
 • Proposed:          ${amount:,.0f} ({proposed_pct:.1f}%)
 • Risk Tolerance:    {risk_tolerance}"""
 
+    # ── Action-specific framing ───────────────────────────────────────────────
+    if analysis_action == "sell":
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ The investor is considering SELLING their {ticker} position.
+  Your role: Evaluate the portfolio impact of selling — does it improve or hurt diversification?
+  Consider tax implications, freed capital redeployment, and concentration relief.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        task_line = f"Analyse whether selling {ticker} would improve portfolio health. Where should the freed capital go?"
+    elif analysis_action == "hold":
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ The investor is deciding whether to HOLD or exit their {ticker} position.
+  Your role: Assess the portfolio construction case for holding vs trimming.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        task_line = f"Analyse whether the current {ticker} position size is appropriate to maintain."
+    else:  # buy
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ The investor is considering adding ${amount:,.0f} to {ticker}.
+  Your role: Analyse concentration, correlation, and rebalancing implications.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        task_line = f"Analyse the portfolio-level implications of adding ${amount:,.0f} to {ticker}."
+
     prompt = f"""You are the Head of Portfolio Construction at a $50B multi-strategy hedge fund.
 Philosophy: Diversification is the only free lunch. Risk management > return maximisation.
 
-Analyse the portfolio-level implications of adding ${amount:,.0f} to {ticker}.
+{action_header}
 
 ━━━ LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {format_market_context(market_data)}
@@ -449,6 +524,8 @@ Analyse the portfolio-level implications of adding ${amount:,.0f} to {ticker}.
 {portfolio_block}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+YOUR TASK: {task_line}
 
 YOUR ANALYSIS FRAMEWORK:
 
@@ -511,8 +588,107 @@ def run_judge_agent(
     strategist: StrategistAnalysis,
     market_data: dict,
     rag_context: str = "",
+    analysis_action: str = "buy",
 ) -> JudgeRecommendation:
     """CIO-level synthesis using Kelly-criterion-inspired position sizing."""
+
+    price     = _md(market_data, "currentPrice", "current_price")
+    bull_conv = bull.confidence * 10
+    bear_conv = bear.confidence * 10
+    conv_gap  = abs(bull_conv - bear_conv)
+    net_bull  = bull_conv - bear_conv
+    signal    = "STRONG BULL" if net_bull > 20 else "STRONG BEAR" if net_bull < -20 else "MIXED"
+
+    if config.PROVIDER == Provider.OLLAMA:
+        bull_txt  = _condense_bull(bull)
+        bear_txt  = _condense_bear(bear)
+        strat_txt = _condense_strategist(strategist)
+    else:
+        bull_txt  = bull.model_dump_json(indent=2)
+        bear_txt  = bear.model_dump_json(indent=2)
+        strat_txt = strategist.model_dump_json(indent=2)
+
+    # ── Action-specific framing ───────────────────────────────────────────────
+    if analysis_action == "sell":
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ SHOULD THE INVESTOR SELL {ticker}?
+  Bull argued: do NOT sell (upside remains)
+  Bear argued: YES, sell now (risks dominate)
+  Your decision: sell / hold / trim
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        action_note = 'action: "sell" means exit the position; "hold" means maintain it; "buy" means add more'
+    elif analysis_action == "hold":
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ SHOULD THE INVESTOR HOLD OR EXIT {ticker}?
+  Bull argued: HOLD — compelling long-term case
+  Bear argued: EXIT — risks outweigh upside
+  Your decision: hold / sell / buy (add more)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        action_note = 'action: "hold" means maintain position; "sell" means exit; "buy" means add more'
+    else:  # buy
+        action_header = f"""━━━ DEBATE QUESTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+▶ SHOULD THE INVESTOR BUY {ticker}?
+  Bull argued: YES — strong upside case
+  Bear argued: NO — risks dominate
+  Your decision: buy / hold / sell
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+        action_note = 'action: "buy" means proceed with purchase; "hold" means wait; "sell" means avoid/exit'
+
+    prompt = f"""You are the Chief Investment Officer allocating capital across a $10B portfolio.
+Synthesise Bull, Bear, and Portfolio Strategist into ONE decisive, actionable recommendation.
+
+{action_header}
+
+━━━ SIGNAL SUMMARY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Ticker: {ticker}  |  Price: ${price:.2f}  |  Consensus: {signal}  |  Conviction gap: {conv_gap:.0f} pts
+Bull conviction: {bull_conv:.0f}/100  |  Bear conviction: {bear_conv:.0f}/100
+
+━━━ 🐂 BULL ANALYST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{bull_txt}
+
+━━━ 🐻 BEAR ANALYST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{bear_txt}
+
+━━━ 📊 PORTFOLIO STRATEGIST ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{strat_txt}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DECISION FRAMEWORK:
+
+EVIDENCE WEIGHTING:
+• Hard data (earnings, guidance, SEC filings) > speculation
+• Recent evidence (last quarter) > historical patterns
+• Bull's strongest point: [cite from above]
+• Bear's strongest point: [cite from above]
+• Strategist's portfolio constraint: [cite recommended allocation]
+
+POSITION SIZING (Modified Kelly):
+• Bull conv >80, Bear conv <60 + low correlation   → 100% of planned size
+• Bull conv 70-80, Bear conv 60-70 + med correlation → 60-75% of size
+• Mixed/high correlation                             → 30-50% or reduce to strategist cap
+
+HARD CONSTRAINTS (must not violate):
+• recommended_amount ≤ strategist's recommended_allocation
+• Max 15% single-stock portfolio concentration
+• {action_note}
+
+TRAFFIC LIGHT LOGIC (include reasoning in risk_management field):
+🟢 GREEN: conviction gap <15 pts, bull dominant, low portfolio correlation
+🟡 YELLOW: gap 15-30 pts, or valuation stretched but growth intact, or borderline concentration
+🔴 RED: gap >30 pts, or >20% portfolio concentration, or structural headwinds dominant
+
+REQUIRED OUTPUT FIELDS:
+• action: "buy" / "hold" / "sell"
+• recommended_amount: specific dollar amount
+• reasoning: 2-3 sentences integrating all three perspectives
+• confidence_overall: 0-100
+• confidence_breakdown: growth_potential, risk_level, portfolio_fit, timing, execution_clarity (each 0-100)
+• entry_strategy: "DCA $X/month for N months" or "Single purchase at market"
+• risk_management: specific price levels (-10% alert, -20% stop-loss) + traffic light color + reason
+• key_factors: top 3-5 factors that drove the decision{_schema_hint(_JUDGE_SKELETON)}"""
+
+    return _invoke(get_judge_llm(), JudgeRecommendation, prompt)
 
     price     = _md(market_data, "currentPrice", "current_price")
     bull_conv = bull.confidence * 10

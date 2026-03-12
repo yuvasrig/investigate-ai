@@ -131,6 +131,7 @@ export interface AnalyzeRequest {
   portfolio: { total_value: number };
   risk_tolerance: string;
   time_horizon: string;
+  analysis_action?: "buy" | "sell" | "hold";
   portfolio_holdings?: PortfolioHolding[];
 }
 

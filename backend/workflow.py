@@ -42,6 +42,7 @@ class InvestmentState(TypedDict):
     portfolio_value: float
     risk_tolerance: str
     time_horizon: str
+    analysis_action: str  # "buy" | "sell" | "hold"
 
     # Live market snapshot (populated by fetch_data node)
     market_data: Optional[dict]
@@ -140,6 +141,7 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
     amount = state["amount"]
     portfolio_value = state["portfolio_value"]
     risk_tolerance = state["risk_tolerance"]
+    analysis_action = state.get("analysis_action", "buy")
     market_data = state["market_data"] or {}
     rag = state.get("rag_context") or {}
 
@@ -154,6 +156,7 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
             rag.get("bull", ""),
             amount,
             portfolio_value,
+            analysis_action,
         )
         bear_fut = ex.submit(
             _run_with_retry,
@@ -165,6 +168,7 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
             rag.get("bear", ""),
             amount,
             portfolio_value,
+            analysis_action,
         )
         strategist_fut = ex.submit(
             _run_with_retry,
@@ -172,7 +176,7 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
             StrategistAnalysis,
             run_strategist_agent,
             ticker, amount, portfolio_value, risk_tolerance,
-            market_data, rag.get("strategist", ""),
+            market_data, rag.get("strategist", ""), None, analysis_action,
         )
         bull = bull_fut.result()
         bear = bear_fut.result()
@@ -273,6 +277,7 @@ def judge_node(state: InvestmentState) -> dict[str, Any]:
         strategist,
         state["market_data"] or {},
         rag.get("judge", ""),
+        state.get("analysis_action", "buy"),
         max_retries=_JUDGE_MAX_RETRIES,
     )
     return {"final_recommendation": recommendation}
@@ -321,6 +326,7 @@ def run_analysis(
     portfolio_value: float,
     risk_tolerance: str,
     time_horizon: str,
+    analysis_action: str = "buy",
 ) -> InvestmentState:
     """Execute the full grounded + RAG investment analysis workflow."""
     initial_state: InvestmentState = {
@@ -329,6 +335,7 @@ def run_analysis(
         "portfolio_value": portfolio_value,
         "risk_tolerance": risk_tolerance,
         "time_horizon": time_horizon,
+        "analysis_action": analysis_action,
         "market_data": None,
         "rag_context": None,
         "rag_summary": None,

@@ -14,16 +14,25 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
-from schemas import AnalysisRequest, AnalysisResponse, TrafficLightResult
+from schemas import (
+    AnalysisRequest, AnalysisResponse, TrafficLightResult, KellySizingResult,
+    RegisterRequest, LoginRequest, TokenResponse, UserResponse,
+    WatchlistCreate, WatchlistResponse, AlertCreate, AlertResponse,
+    TaxHarvestRequest,
+)
 from workflow import run_analysis
 from llm_factory import health_check as llm_health_check
-from database import create_tables, get_db
+from database import create_tables, get_db, User, Watchlist, Alert
 from services.storage_service import save_analysis, get_analysis, list_analyses
 from services.cache_service import get_cached, set_cached
 from services.export_service import generate_pdf
 from portfolio_analyzer import calculate_hidden_exposure
 from demo_data import DEMO_PORTFOLIO
 import voice_parser as vp
+from kelly import compute_kelly_sizing
+import plaid_service
+import auth as auth_module
+import tax_harvesting
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────
 
@@ -159,7 +168,7 @@ def providers():
 
 
 @app.post("/analyze", response_model=AnalysisResponse)
-@limiter.limit("10/minute")
+@limiter.limit("30/minute")
 def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_db)):
     ticker = body.ticker.strip().upper()
     if not ticker:
@@ -189,6 +198,7 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
             portfolio_value=portfolio_value,
             risk_tolerance=body.risk_tolerance,
             time_horizon=body.time_horizon,
+            analysis_action=body.analysis_action,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
@@ -203,6 +213,21 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
         result["bear_analysis"],
         result["final_recommendation"],
     )
+
+    # ── Kelly Criterion position sizing ───────────────────────────────────────
+    kelly_sizing = None
+    try:
+        kelly_dict = compute_kelly_sizing(
+            bull_analysis=result["bull_analysis"],
+            bear_analysis=result["bear_analysis"],
+            strategist_analysis=result["strategist_analysis"],
+            market_data=result.get("market_data") or {},
+            proposed_amount=body.amount,
+            portfolio_value=portfolio_value,
+        )
+        kelly_sizing = KellySizingResult(**kelly_dict)
+    except Exception:
+        kelly_sizing = None
 
     # ── Portfolio hidden exposure ──────────────────────────────────────────────
     portfolio_exposure = None
@@ -230,6 +255,7 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
             rag_summary=result.get("rag_summary"),
             traffic_light=traffic_light,
             portfolio_exposure=portfolio_exposure,
+            kelly_sizing=kelly_sizing,
             execution_time=elapsed,
             timestamp=timestamp,
         )
@@ -389,6 +415,260 @@ def portfolio_exposure_endpoint(body: dict):
         raise HTTPException(status_code=400, detail="ticker and holdings are required")
     exposure = calculate_hidden_exposure(holdings, ticker, amount)
     return exposure
+
+
+# ── Plaid endpoints ───────────────────────────────────────────────────────────
+
+@app.post("/api/plaid/link-token")
+def plaid_link_token(body: dict):
+    """
+    Request a Plaid Link token for the frontend to open the Plaid modal.
+    Body: { "user_id": "<your-user-id>" }   (optional — defaults to "anonymous")
+    """
+    if not plaid_service.is_available():
+        raise HTTPException(
+            status_code=501,
+            detail="Plaid is not configured. Set PLAID_CLIENT_ID and PLAID_SECRET in .env."
+        )
+    user_id = body.get("user_id", "anonymous")
+    try:
+        link_token = plaid_service.create_link_token(user_id)
+        return {"link_token": link_token}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/plaid/exchange-token")
+def plaid_exchange_token(body: dict):
+    """
+    Exchange the short-lived public_token (from Plaid Link onSuccess) for an
+    access_token and immediately return the investment holdings.
+    Body: { "public_token": "<token-from-frontend>" }
+    """
+    if not plaid_service.is_available():
+        raise HTTPException(
+            status_code=501,
+            detail="Plaid is not configured. Set PLAID_CLIENT_ID and PLAID_SECRET in .env."
+        )
+    public_token = body.get("public_token", "")
+    if not public_token:
+        raise HTTPException(status_code=400, detail="public_token is required")
+    try:
+        access_token = plaid_service.exchange_public_token(public_token)
+        portfolio = plaid_service.get_portfolio_summary(access_token)
+        return portfolio
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Auth endpoints ────────────────────────────────────────────────────────────
+
+@app.post("/auth/register", response_model=UserResponse)
+def register(body: RegisterRequest, db: Session = Depends(get_db)):
+    """Register a new user. Returns the created user profile."""
+    try:
+        user = auth_module.register_user(db, body.email, body.password, body.name or "")
+        return UserResponse(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            created_at=user.created_at,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login(body: LoginRequest, db: Session = Depends(get_db)):
+    """Authenticate and return a JWT bearer token."""
+    user = auth_module.authenticate_user(db, body.email, body.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = auth_module.create_access_token(user.id, user.email)
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserResponse(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            created_at=user.created_at,
+        ),
+    )
+
+
+@app.get("/auth/me", response_model=UserResponse)
+def me(current_user: User = Depends(auth_module.require_user)):
+    """Return the currently authenticated user's profile."""
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        name=current_user.name,
+        created_at=current_user.created_at,
+    )
+
+
+# ── Watchlist endpoints ────────────────────────────────────────────────────────
+
+@app.post("/api/watchlist", response_model=WatchlistResponse)
+def create_watchlist(
+    body: WatchlistCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth_module.require_user),
+):
+    """Create a new watchlist for the authenticated user."""
+    import uuid as _uuid
+    from datetime import datetime, timezone as _tz
+    wl = Watchlist(
+        id=str(_uuid.uuid4()),
+        user_id=current_user.id,
+        name=body.name,
+        tickers=body.tickers,
+        notes=body.notes,
+        created_at=datetime.now(_tz.utc),
+    )
+    db.add(wl)
+    db.commit()
+    db.refresh(wl)
+    return wl
+
+
+@app.get("/api/watchlist", response_model=list[WatchlistResponse])
+def list_watchlists(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth_module.require_user),
+):
+    """Return all watchlists for the authenticated user."""
+    return db.query(Watchlist).filter(Watchlist.user_id == current_user.id).all()
+
+
+@app.delete("/api/watchlist/{watchlist_id}")
+def delete_watchlist(
+    watchlist_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth_module.require_user),
+):
+    """Delete a watchlist owned by the authenticated user."""
+    wl = db.query(Watchlist).filter(
+        Watchlist.id == watchlist_id,
+        Watchlist.user_id == current_user.id,
+    ).first()
+    if not wl:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    db.delete(wl)
+    db.commit()
+    return {"deleted": watchlist_id}
+
+
+# ── Alert endpoints ────────────────────────────────────────────────────────────
+
+@app.post("/api/alerts", response_model=AlertResponse)
+def create_alert(
+    body: AlertCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth_module.require_user),
+):
+    """Create a price / risk alert for the authenticated user."""
+    import uuid as _uuid
+    from datetime import datetime, timezone as _tz
+    alert = Alert(
+        id=str(_uuid.uuid4()),
+        user_id=current_user.id,
+        ticker=body.ticker.upper(),
+        alert_type=body.alert_type,
+        threshold=body.threshold,
+        message=body.message,
+        is_active=True,
+        created_at=datetime.now(_tz.utc),
+    )
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+    return alert
+
+
+@app.get("/api/alerts", response_model=list[AlertResponse])
+def list_alerts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth_module.require_user),
+):
+    """Return all active alerts for the authenticated user."""
+    return db.query(Alert).filter(Alert.user_id == current_user.id).all()
+
+
+@app.delete("/api/alerts/{alert_id}")
+def delete_alert(
+    alert_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth_module.require_user),
+):
+    """Delete an alert owned by the authenticated user."""
+    alert = db.query(Alert).filter(
+        Alert.id == alert_id,
+        Alert.user_id == current_user.id,
+    ).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    db.delete(alert)
+    db.commit()
+    return {"deleted": alert_id}
+
+
+# ── Tax-loss harvesting endpoint ───────────────────────────────────────────────
+
+@app.post("/api/tax-harvest")
+def tax_harvest(body: TaxHarvestRequest):
+    """
+    Analyse a list of holdings for tax-loss harvesting opportunities.
+
+    Body: { "holdings": [{"ticker": "NVDA", "value": 10000, "cost_basis": 12000, ...}] }
+    """
+    holdings_dicts = [h.model_dump() for h in body.holdings]
+    result = tax_harvesting.analyse_tax_loss_opportunities(
+        holdings_dicts, tax_year=body.tax_year
+    )
+    return result
+
+
+# ── Kelly standalone endpoint ──────────────────────────────────────────────────
+
+@app.post("/api/kelly")
+def kelly_endpoint(body: dict):
+    """
+    Compute Kelly Criterion position sizing given bull/bear conviction + prices.
+
+    Body: {
+      "bull_conviction": 0.7,       # 0-1
+      "bear_conviction": 0.3,       # 0-1
+      "bull_target": 200.0,         # price target
+      "bear_target": 80.0,          # price target
+      "current_price": 130.0,
+      "proposed_amount": 5000,
+      "portfolio_value": 100000,
+      "strategist_cap": 15000,      # optional
+      "correlation": 0.65           # optional
+    }
+    """
+    from kelly import kelly_position_size
+    try:
+        result = kelly_position_size(
+            bull_conviction=float(body["bull_conviction"]),
+            bear_conviction=float(body["bear_conviction"]),
+            bull_target=float(body["bull_target"]),
+            bear_target=float(body["bear_target"]),
+            current_price=float(body["current_price"]),
+            proposed_amount=float(body["proposed_amount"]),
+            portfolio_value=float(body["portfolio_value"]),
+            strategist_cap=float(body.get("strategist_cap", float(body["portfolio_value"]) * 0.15)),
+            correlation=float(body.get("correlation", 0.65)),
+        )
+        return KellySizingResult(**result).model_dump()
+    except (KeyError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=f"Missing or invalid field: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Dev entrypoint ─────────────────────────────────────────────────────────────

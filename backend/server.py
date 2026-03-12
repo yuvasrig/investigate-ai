@@ -26,7 +26,7 @@ from database import create_tables, get_db, User, Watchlist, Alert
 from services.storage_service import save_analysis, get_analysis, list_analyses
 from services.cache_service import get_cached, set_cached
 from services.export_service import generate_pdf
-from portfolio_analyzer import calculate_hidden_exposure
+from portfolio_analyzer import calculate_hidden_exposure, analyze_complete_portfolio
 from demo_data import DEMO_PORTFOLIO
 import voice_parser as vp
 from kelly import compute_kelly_sizing
@@ -395,6 +395,31 @@ def parse_text_intent(body: dict):
 def get_demo_portfolio():
     """Return the canned demo portfolio for testing / demo video."""
     return DEMO_PORTFOLIO
+
+
+@app.post("/api/portfolio/analyze-complete")
+def portfolio_analyze_complete(body: dict):
+    """
+    Tier-1 portfolio analysis: categorise every holding into long-term core,
+    growth positions, concentration risks, and missing protections.
+
+    Body: { "holdings": [...], "total_value": 80000 }
+    Returns the full PortfolioReport structure consumed by PortfolioReportCard.
+    """
+    try:
+        report = analyze_complete_portfolio(body)
+        return report
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/portfolio/demo/analyze")
+def get_demo_portfolio_analysis():
+    """Convenience endpoint — runs Tier-1 analysis on the built-in demo portfolio."""
+    try:
+        return analyze_complete_portfolio(DEMO_PORTFOLIO)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/portfolio/exposure")

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   TrendingUp, TrendingDown, Pause, Mic, MicOff,
-  ChevronRight, Loader2, Search, Bell, BarChart2, X, Zap
+  ChevronRight, Loader2, Search, Bell, BarChart2, X, Zap, CircleHelp, ShieldAlert, Shield
 } from "lucide-react";
 import { motion } from "framer-motion";
 import CountUp from "react-countup";
@@ -10,7 +10,7 @@ import {
   AreaChart, Area, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { useAnalysis, type AnalysisAction } from "@/context/AnalysisContext";
-import PortfolioReportCard, { type PortfolioReport } from "@/components/PortfolioReportCard";
+import type { PortfolioReport } from "@/components/PortfolioReportCard";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:8000";
 
@@ -31,6 +31,29 @@ interface Portfolio {
   cash?: number;
   growth_history?: GrowthPoint[];
 }
+
+const AGENT_ROLES = [
+  {
+    name: "Bull Analyst",
+    role: "Senior Equity Analyst",
+    description: "Builds the strongest upside case, focusing on growth, moats, and valuation support.",
+  },
+  {
+    name: "Bear Analyst",
+    role: "Veteran Short Seller",
+    description: "Builds the downside case by stress-testing assumptions and identifying structural risks.",
+  },
+  {
+    name: "Portfolio Strategist",
+    role: "Head of Portfolio Construction",
+    description: "Evaluates concentration risk and position sizing in the context of your full portfolio.",
+  },
+  {
+    name: "CIO / Judge",
+    role: "Chief Investment Officer",
+    description: "Makes the final recommendation by weighing evidence quality and conviction across all agents.",
+  },
+] as const;
 
 const QUERY_STOPWORDS = new Set([
   "A", "AN", "AND", "ARE", "BE", "BUY", "FOR", "HOLD", "I", "IF", "IN",
@@ -115,6 +138,74 @@ function Sparkline({ positive }: { positive: boolean }) {
   );
 }
 
+function MiniHoldingList({
+  items,
+  accent,
+}: {
+  items: PortfolioReport["long_term_core"];
+  accent: string;
+}) {
+  if (!items.length) {
+    return <p className="text-xs text-gray-500">No positions in this bucket.</p>;
+  }
+  return (
+    <div className="space-y-2">
+      {items.slice(0, 5).map((item) => (
+        <div key={item.ticker} className="flex items-start justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-gray-900">{item.ticker}</p>
+            <p className="text-[11px] text-gray-500 truncate">{item.reason}</p>
+          </div>
+          <p className={`text-xs font-semibold tabular-nums ${accent}`}>{item.percentage.toFixed(1)}%</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RiskAndProtectionPanel({
+  report,
+}: {
+  report: PortfolioReport | null;
+}) {
+  const risks = report?.concentration_risks ?? [];
+  const protections = report?.missing_protections ?? [];
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 space-y-4 h-full">
+      <div>
+        <p className="text-xs uppercase tracking-widest text-gray-500 font-semibold mb-2">Concentration Risks</p>
+        {risks.length === 0 ? (
+          <p className="text-xs text-gray-500">No major concentration warnings detected.</p>
+        ) : (
+          <div className="space-y-2">
+            {risks.slice(0, 4).map((risk, idx) => (
+              <div key={`${risk.ticker}-${idx}`} className="rounded-lg border border-red-100 bg-red-50 px-3 py-2">
+                <p className="text-xs font-semibold text-red-700">{risk.name}</p>
+                <p className="text-[11px] text-red-600">{risk.message}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div>
+        <p className="text-xs uppercase tracking-widest text-gray-500 font-semibold mb-2">Missing Protections</p>
+        {protections.length === 0 ? (
+          <p className="text-xs text-gray-500">Portfolio has core protection buckets.</p>
+        ) : (
+          <div className="space-y-2">
+            {protections.slice(0, 3).map((item) => (
+              <div key={item.type} className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2">
+                <p className="text-xs font-semibold text-amber-700">{item.type === "bonds" ? "Bond Buffer" : "International Exposure"}</p>
+                <p className="text-[11px] text-amber-700">{item.message}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const ACTION_CONFIG = {
   buy: {
     label: "Buy More",
@@ -154,9 +245,9 @@ export default function Landing() {
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [selectedAction, setSelectedAction] = useState<AnalysisAction>("buy");
 
-  // Custom ticker panel
-  const [showSearch, setShowSearch] = useState(false);
+  // Top search bar
   const [searchInput, setSearchInput] = useState("");
+  const [showAgentRoles, setShowAgentRoles] = useState(false);
 
   // Analysis params
   const [amount, setAmount] = useState("5000");
@@ -191,25 +282,6 @@ export default function Landing() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Tier-2: launch 4-agent deep analysis from the report card
-  const handleReportAnalyze = (ticker: string) => {
-    const portfolioValue = portfolio?.total_value ?? 80000;
-    const holding = portfolio?.holdings.find((h) => h.ticker === ticker);
-    const suggestedAmount = holding
-      ? String(Math.round(Math.max(500, Math.min(holding.value * 0.1, 10000)) / 100) * 100)
-      : amount;
-    setFormData({
-      ticker,
-      amount: suggestedAmount,
-      portfolio: String(portfolioValue),
-      riskTolerance,
-      timeHorizon,
-      userQuery: `Should I hold ${ticker}?`,
-    });
-    setAnalysisAction("hold"); // default to "hold" for existing positions
-    navigate("/loading");
-  };
-
   const handleRowClick = (ticker: string, currentValue: number) => {
     if (expandedTicker === ticker) {
       setExpandedTicker(null);
@@ -218,7 +290,6 @@ export default function Landing() {
       setSelectedAction("buy");
       const suggested = Math.round((currentValue * 0.1) / 100) * 100;
       setAmount(String(Math.max(500, Math.min(suggested, 10000))));
-      setShowSearch(false);
     }
   };
 
@@ -281,11 +352,18 @@ export default function Landing() {
     <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col">
       {/* ── Top nav ──────────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200 shadow-sm">
-        <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <span className="font-bold text-lg tracking-tight text-gray-900">
             Investi<span className="text-blue-600">Gate</span>
           </span>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAgentRoles(true)}
+              className="p-2 rounded-full hover:bg-gray-100 transition-colors text-gray-500 hover:text-gray-900"
+              title="Agent Roles"
+            >
+              <CircleHelp className="w-4 h-4" />
+            </button>
             <button
               onClick={() => navigate("/portfolio")}
               className="p-2 rounded-full hover:bg-gray-100 transition-colors text-gray-500 hover:text-gray-900"
@@ -299,159 +377,184 @@ export default function Landing() {
           </div>
         </div>
       </header>
-
-      <div className="max-w-lg mx-auto w-full px-4 pb-24 flex-1">
-
-        {/* ── Portfolio hero ──────────────────────────────────────────────────── */}
-        <motion.section
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.45 }}
-          className="pt-6 pb-2"
-        >
-          {loading ? (
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-3 animate-pulse">
-              <div className="h-3 w-28 bg-gray-200 rounded mx-auto" />
-              <div className="h-12 w-40 bg-gray-200 rounded mx-auto" />
-              <div className="h-5 w-36 bg-gray-200 rounded mx-auto" />
-              <div className="h-20 bg-gray-100 rounded-xl" />
+      {showAgentRoles && (
+        <div className="fixed inset-0 z-40 bg-black/35 backdrop-blur-[1px] flex items-start justify-center p-4">
+          <div className="w-full max-w-lg mt-20 bg-white rounded-2xl border border-gray-200 shadow-xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <h3 className="text-base font-semibold text-gray-900">Agent Roles</h3>
+              <button
+                onClick={() => setShowAgentRoles(false)}
+                className="p-1.5 rounded-md hover:bg-gray-100 text-gray-500 hover:text-gray-900"
+                aria-label="Close agent roles"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-          ) : (
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="px-6 pt-6 pb-4 text-center">
-                <p className="text-xs text-gray-500 font-semibold uppercase tracking-widest mb-1">
-                  Total Portfolio Value
-                </p>
-                <h1 className="text-5xl font-bold tracking-tight text-gray-900 mb-1 tabular-nums">
-                  $<CountUp
-                    end={portfolio?.total_value ?? 0}
-                    duration={1.4}
-                    separator=","
-                    decimals={0}
-                  />
-                </h1>
-                <div
-                  className={`inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-1 rounded-full ${
-                    totalGainPct >= 0
-                      ? "text-green-600 bg-green-50"
-                      : "text-red-600 bg-red-50"
-                  }`}
-                >
-                  {totalGainPct >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-                  {totalGainPct >= 0 ? "+" : ""}
-                  {totalGainPct.toFixed(2)}% (
-                  {totalGain >= 0 ? "+" : "−"}$
-                  {Math.abs(totalGain).toLocaleString(undefined, { maximumFractionDigits: 0 })})
-                  <span className="text-gray-400 font-normal">all‑time</span>
+            <div className="p-5 space-y-3">
+              {AGENT_ROLES.map((agent) => (
+                <div key={agent.name} className="rounded-lg border border-gray-200 p-3">
+                  <p className="text-sm font-semibold text-gray-900">{agent.name}</p>
+                  <p className="text-xs text-blue-700 font-medium mb-1">{agent.role}</p>
+                  <p className="text-xs text-gray-600 leading-relaxed">{agent.description}</p>
                 </div>
-              </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
-              {/* Recharts area sparkline */}
-              {portfolio?.growth_history && portfolio.growth_history.length > 1 && (
-                <div className="px-2 pb-3">
-                  <PortfolioChart data={portfolio.growth_history} positive={totalGainPct >= 0} />
+      <div className="max-w-7xl mx-auto w-full px-4 pb-24 flex-1">
+
+        {/* ── Portfolio hero ──────────────────────────────────────────────────── */}        <div className="pt-6 pb-2 space-y-5">
+          <div className="rounded-2xl bg-white border border-gray-200 shadow-sm overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
+              <Search className="w-4 h-4 text-gray-400 shrink-0" />
+              <input
+                autoFocus
+                type="text"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Ask anything: What will happen to ACN if Claude succeeds in replacing consulting companies?"
+                className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none"
+              />
+              <button
+                onClick={toggleVoice}
+                className={`p-1.5 rounded-full transition-colors ${listening ? "text-red-500 bg-red-50" : "text-gray-400 hover:text-gray-700"}`}
+              >
+                {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              {parsedSearchTicker && (
+                <div className="rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
+                  Target asset: <span className="font-semibold tabular-nums">{parsedSearchTicker}</span>
                 </div>
               )}
-            </div>
-          )}
-        </motion.section>
-
-        {/* ── Search / custom ticker ──────────────────────────────────────────── */}
-        <div className="mb-4 mt-4">
-          {!showSearch ? (
-            <button
-              onClick={() => {
-                setShowSearch(true);
-                setExpandedTicker(null);
-              }}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-white border border-gray-200 shadow-sm text-gray-500 hover:border-blue-400 hover:text-gray-900 transition-all text-sm"
-            >
-              <Search className="w-4 h-4 shrink-0" />
-              <span>Search or enter a new ticker to analyze…</span>
-            </button>
-          ) : (
-            <div className="rounded-2xl bg-white border border-blue-400 shadow-md overflow-hidden">
-              <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
-                <Search className="w-4 h-4 text-gray-400 shrink-0" />
-                <input
-                  autoFocus
-                  type="text"
-                  value={searchInput}
-                  onChange={(e) => setSearchInput(e.target.value)}
-                  placeholder="Should I buy NVDA? I'm worried about Taiwan."
-                  className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none"
-                />
-                <button
-                  onClick={toggleVoice}
-                  className={`p-1.5 rounded-full transition-colors ${listening ? "text-red-500 bg-red-50" : "text-gray-400 hover:text-gray-700"}`}
-                >
-                  {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                </button>
-                <button onClick={() => setShowSearch(false)} className="text-gray-400 hover:text-gray-700">
-                  <X className="w-4 h-4" />
-                </button>
+              <div className="grid grid-cols-3 gap-2">
+                {(Object.keys(ACTION_CONFIG) as AnalysisAction[]).map((a) => {
+                  const cfg = ACTION_CONFIG[a];
+                  const Icon = cfg.icon;
+                  return (
+                    <button
+                      key={a}
+                      onClick={() => setSelectedAction(a)}
+                      className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-xs font-semibold transition-all ${selectedAction === a
+                          ? `${cfg.color} ${cfg.border} bg-muted/40`
+                          : "border-border text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      {cfg.label}
+                    </button>
+                  );
+                })}
               </div>
+              <AnalysisParams
+                amount={amount}
+                setAmount={setAmount}
+                riskTolerance={riskTolerance}
+                setRiskTolerance={setRiskTolerance}
+                timeHorizon={timeHorizon}
+                setTimeHorizon={setTimeHorizon}
+              />
+              <button
+                onClick={() => handleInvestigate(parsedSearchTicker, true)}
+                disabled={!parsedSearchTicker}
+                className={`w-full py-3 rounded-xl font-bold text-sm text-white transition-all active:scale-[0.98] disabled:opacity-40 ${ACTION_CONFIG[selectedAction].bg}`}
+              >
+                Investigate {parsedSearchTicker || "query"} - {ACTION_CONFIG[selectedAction].label}
+              </button>
+            </div>
+          </div>
 
-              {/* Action + params for search */}
-              {searchInput.trim().length >= 1 && (
-                <div className="p-4 space-y-4">
-                  {parsedSearchTicker && (
-                    <div className="rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
-                      Intent router target asset: <span className="font-semibold tabular-nums">{parsedSearchTicker}</span>
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+            <motion.section
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45 }}
+              className="xl:col-span-3"
+            >
+              {loading ? (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-3 animate-pulse">
+                  <div className="h-3 w-28 bg-gray-200 rounded" />
+                  <div className="h-12 w-40 bg-gray-200 rounded" />
+                  <div className="h-5 w-36 bg-gray-200 rounded" />
+                  <div className="h-20 bg-gray-100 rounded-xl" />
+                </div>
+              ) : (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden h-full">
+                  <div className="px-6 pt-6 pb-4">
+                    <p className="text-xs text-gray-500 font-semibold uppercase tracking-widest mb-1">
+                      Total Portfolio Value
+                    </p>
+                    <h1 className="text-4xl font-bold tracking-tight text-gray-900 mb-1 tabular-nums">
+                      $<CountUp end={portfolio?.total_value ?? 0} duration={1.2} separator="," decimals={0} />
+                    </h1>
+                    <div className={`inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-1 rounded-full ${
+                      totalGainPct >= 0 ? "text-green-600 bg-green-50" : "text-red-600 bg-red-50"
+                    }`}>
+                      {totalGainPct >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+                      {totalGainPct >= 0 ? "+" : ""}{totalGainPct.toFixed(2)}%
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2 tabular-nums">
+                      {totalGain >= 0 ? "+" : "-"}${Math.abs(totalGain).toLocaleString(undefined, { maximumFractionDigits: 0 })} all-time
+                    </p>
+                  </div>
+                  {portfolio?.growth_history && portfolio.growth_history.length > 1 && (
+                    <div className="px-2 pb-3">
+                      <PortfolioChart data={portfolio.growth_history} positive={totalGainPct >= 0} />
                     </div>
                   )}
-                  {/* Action selector */}
-                  <div className="grid grid-cols-3 gap-2">
-                    {(Object.keys(ACTION_CONFIG) as AnalysisAction[]).map((a) => {
-                      const cfg = ACTION_CONFIG[a];
-                      const Icon = cfg.icon;
-                      return (
-                        <button
-                          key={a}
-                          onClick={() => setSelectedAction(a)}
-                          className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-xs font-semibold transition-all ${selectedAction === a
-                              ? `${cfg.color} ${cfg.border} bg-muted/40`
-                              : "border-border text-muted-foreground hover:text-foreground"
-                            }`}
-                        >
-                          <Icon className="w-4 h-4" />
-                          {cfg.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {/* Params */}
-                  <AnalysisParams
-                    amount={amount}
-                    setAmount={setAmount}
-                    riskTolerance={riskTolerance}
-                    setRiskTolerance={setRiskTolerance}
-                    timeHorizon={timeHorizon}
-                    setTimeHorizon={setTimeHorizon}
-                  />
-                  <button
-                    onClick={() => handleInvestigate(parsedSearchTicker, true)}
-                    disabled={!parsedSearchTicker}
-                    className={`w-full py-3 rounded-xl font-bold text-sm text-white transition-all active:scale-[0.98] disabled:opacity-40 ${ACTION_CONFIG[selectedAction].bg
-                      }`}
-                  >
-                    Investigate {parsedSearchTicker || "query"} — {ACTION_CONFIG[selectedAction].label} →
-                  </button>
                 </div>
               )}
-            </div>
-          )}
+            </motion.section>
+
+            <section className="xl:col-span-5">
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 h-full">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-widest text-gray-500 font-semibold">Portfolio Analysis</p>
+                    <h3 className="text-base font-semibold text-gray-900">Core vs Growth Positions</h3>
+                  </div>
+                  {portfolioReport && (
+                    <span className="text-xs font-semibold bg-blue-50 text-blue-700 px-2 py-1 rounded-full">
+                      Risk {portfolioReport.overall_risk_score.toFixed(1)}/10
+                    </span>
+                  )}
+                </div>
+                {!portfolioReport ? (
+                  <p className="text-sm text-gray-500">Loading portfolio analysis...</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <Shield className="w-4 h-4 text-emerald-600" />
+                        <p className="text-sm font-semibold text-emerald-700">Long-Term Core</p>
+                      </div>
+                      <MiniHoldingList items={portfolioReport.long_term_core} accent="text-emerald-700" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <TrendingUp className="w-4 h-4 text-blue-700" />
+                        <p className="text-sm font-semibold text-blue-700">Growth Positions</p>
+                      </div>
+                      <MiniHoldingList items={portfolioReport.growth_positions} accent="text-blue-700" />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section className="xl:col-span-4">
+              <div className="flex items-center gap-2 mb-2">
+                <ShieldAlert className="w-4 h-4 text-amber-600" />
+                <p className="text-xs uppercase tracking-widest text-gray-500 font-semibold">Risk Controls</p>
+              </div>
+              <RiskAndProtectionPanel report={portfolioReport} />
+            </section>
+          </div>
         </div>
-
-        {/* ── Tier-1 Portfolio Analysis Report ────────────────────────────────── */}
-        {!loading && portfolioReport && (
-          <PortfolioReportCard
-            report={portfolioReport}
-            onAnalyze={handleReportAnalyze}
-          />
-        )}
-
-        {/* ── Holdings list ───────────────────────────────────────────────────── */}
+        {/* Holdings list */}
         <section>
           <p className="text-xs uppercase tracking-widest text-gray-500 font-semibold px-1 mb-3">
             Holdings
@@ -602,33 +705,6 @@ export default function Landing() {
           )}
         </section>
 
-        {/* ── 4-agent legend ───────────────────────────────────────────────────── */}
-        {!expandedTicker && !showSearch && (
-          <motion.section
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.4 }}
-            className="mt-6 bg-white rounded-2xl shadow-sm border border-gray-100 p-5"
-          >
-            <p className="text-xs text-gray-500 font-semibold mb-4 text-center uppercase tracking-widest">
-              4-Agent Debate Engine
-            </p>
-            <div className="grid grid-cols-4 gap-3 text-center">
-              {[
-                { e: "🐂", t: "Bull",       d: "Upside case",    bg: "bg-green-50",   txt: "text-green-700"  },
-                { e: "🐻", t: "Bear",        d: "Risk case",      bg: "bg-red-50",     txt: "text-red-700"    },
-                { e: "📊", t: "Strategist",  d: "Portfolio fit",  bg: "bg-blue-50",    txt: "text-blue-700"   },
-                { e: "⚖️", t: "CIO",         d: "Final call",     bg: "bg-purple-50",  txt: "text-purple-700" },
-              ].map((a) => (
-                <div key={a.t} className={`rounded-xl ${a.bg} py-3 px-2`}>
-                  <div className="text-xl mb-1">{a.e}</div>
-                  <div className={`text-xs font-bold ${a.txt}`}>{a.t}</div>
-                  <div className="text-[10px] text-gray-500 mt-0.5">{a.d}</div>
-                </div>
-              ))}
-            </div>
-          </motion.section>
-        )}
       </div>
     </div>
   );
@@ -687,3 +763,5 @@ function AnalysisParams({
     </div>
   );
 }
+
+

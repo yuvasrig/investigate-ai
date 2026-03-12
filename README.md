@@ -14,6 +14,10 @@ InvestiGate is a multi-agent AI investment analysis platform. Given a stock tick
 | **Judge verdict** | Final Buy / Hold / Sell recommendation with confidence breakdown |
 | **Traffic Light** | Green / Yellow / Red consensus signal from conviction scores |
 | **Portfolio Exposure** | Detects hidden concentration risk through ETF holdings (SPY, QQQ, VOO, VTI…) |
+| **Dashboard Homepage** | Search bar across top + 3-column portfolio dashboard (value card, portfolio analysis, risk controls) |
+| **Agent Role Explainers** | Dedicated Agent Roles view in Results + quick access on startup page (`?` icon) |
+| **Sortable Holdings Table** | Portfolio holdings can be sorted by any attribute in ascending/descending order |
+| **Realistic Portfolio Trend** | Portfolio value-over-time includes natural variability (ups and downs) |
 | **Voice Input** | Speak your idea ("Invest $5,000 in NVIDIA") — auto-fills the form via Whisper + regex fallback |
 | **PDF / JSON export** | Download the full analysis report |
 | **History & Compare** | Browse past analyses and compare two stocks side-by-side |
@@ -153,7 +157,7 @@ investigate-ai/
 │
 ├── backend/
 │   ├── server.py             # FastAPI app — all HTTP endpoints
-│   ├── agents.py             # Bull / Bear / Strategist / Judge agents
+│   ├── agents/               # Bull / Bear / Strategist / Judge agents (package)
 │   ├── workflow.py           # LangGraph orchestration
 │   ├── schemas.py            # Pydantic request/response models
 │   ├── config.py             # env-var configuration
@@ -170,9 +174,10 @@ investigate-ai/
 │
 └── src/
     ├── pages/
-    │   ├── Landing.tsx        # form + voice input
+    │   ├── Landing.tsx        # dashboard homepage + top search + holdings actions
     │   ├── Loading.tsx        # analysis progress screen
-    │   ├── Results.tsx        # full results (traffic light, exposure, debate)
+    │   ├── Results.tsx        # full results + Agent Roles tab
+    │   ├── PortfolioDashboard.tsx # sortable full holdings + portfolio analytics
     │   ├── HistoryPage.tsx    # past analyses
     │   └── ComparePage.tsx    # side-by-side comparison
     ├── components/

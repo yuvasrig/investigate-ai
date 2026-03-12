@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Float, ForeignKey,
-    JSON, String, Text, create_engine,
+    JSON, String, Text, create_engine, text,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 
@@ -126,6 +126,24 @@ class Alert(Base):
 
 def create_tables() -> None:
     Base.metadata.create_all(bind=engine)
+    _run_sqlite_migrations()
+
+
+def _run_sqlite_migrations() -> None:
+    """
+    Apply lightweight SQLite-only schema migrations for backward compatibility.
+
+    Existing users may have an older `analyses` table without `user_id`.
+    SQLAlchemy's create_all() won't alter existing tables, so add the column here.
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+
+    with engine.begin() as conn:
+        columns = conn.execute(text("PRAGMA table_info(analyses)")).fetchall()
+        column_names = {row[1] for row in columns}
+        if "user_id" not in column_names:
+            conn.execute(text("ALTER TABLE analyses ADD COLUMN user_id VARCHAR"))
 
 
 def get_db():

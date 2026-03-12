@@ -61,9 +61,13 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   // Seed from localStorage so auth persists across page reloads
-  const [token, setToken] = useState<string | null>(() =>
-    localStorage.getItem(TOKEN_KEY)
-  );
+  const [token, setToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(TOKEN_KEY);
+    } catch {
+      return null;
+    }
+  });
   const [user, setUser] = useState<AuthUser | null>(() => {
     try {
       const raw = localStorage.getItem(USER_KEY);
@@ -76,13 +80,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   // Sync to localStorage whenever token/user changes
   useEffect(() => {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
+    try {
+      if (token) localStorage.setItem(TOKEN_KEY, token);
+      else localStorage.removeItem(TOKEN_KEY);
+    } catch {
+      // Ignore storage write failures (private mode / blocked storage).
+    }
   }, [token]);
 
   useEffect(() => {
-    if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
-    else localStorage.removeItem(USER_KEY);
+    try {
+      if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
+      else localStorage.removeItem(USER_KEY);
+    } catch {
+      // Ignore storage write failures (private mode / blocked storage).
+    }
   }, [user]);
 
   const login = useCallback(async (email: string, password: string) => {

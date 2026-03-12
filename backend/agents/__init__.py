@@ -60,6 +60,59 @@ def _extract_json_text(text: str) -> dict:
     raise ValueError(f"No JSON object found in model output: {text[:300]!r}")
 
 
+def _coerce_claim_list(value) -> list[dict]:
+    """Normalize model claim lists into VerifiedClaim-compatible dicts."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        value = [value]
+
+    result: list[dict] = []
+    for item in value:
+        if isinstance(item, dict):
+            claim_text = (
+                item.get("claim")
+                or item.get("text")
+                or item.get("threat")
+                or item.get("risk")
+                or str(item)
+            )
+            result.append(
+                {
+                    "claim": str(claim_text),
+                    "is_speculative": bool(item.get("is_speculative", False)),
+                }
+            )
+        else:
+            result.append({"claim": str(item), "is_speculative": False})
+    return result
+
+
+def _normalize_schema_payload(obj: dict, schema_cls: Type[T]) -> dict:
+    """Apply schema-specific compatibility fixes for noisy local model JSON."""
+    data = dict(obj)
+
+    if schema_cls is BearAnalysis:
+        if "competition_threats" not in data:
+            for alt in (
+                "competitive_threats",
+                "competitive_risks",
+                "threats",
+                "key_risks",
+            ):
+                if alt in data:
+                    data["competition_threats"] = data.get(alt)
+                    break
+        data["competition_threats"] = _coerce_claim_list(data.get("competition_threats"))
+        data["cyclical_risks"] = _coerce_claim_list(data.get("cyclical_risks"))
+
+    if schema_cls is BullAnalysis:
+        data["competitive_advantages"] = _coerce_claim_list(data.get("competitive_advantages"))
+        data["growth_catalysts"] = _coerce_claim_list(data.get("growth_catalysts"))
+
+    return data
+
+
 def _parse_schema(raw, schema_cls: Type[T]) -> T:
     if isinstance(raw, schema_cls):
         return raw
@@ -76,10 +129,10 @@ def _parse_schema(raw, schema_cls: Type[T]) -> T:
         inner = next(iter(obj.values()))
         if isinstance(inner, dict):
             try:
-                return schema_cls.model_validate(inner)
+                return schema_cls.model_validate(_normalize_schema_payload(inner, schema_cls))
             except Exception:
                 pass
-    return schema_cls.model_validate(obj)
+    return schema_cls.model_validate(_normalize_schema_payload(obj, schema_cls))
 
 
 def _invoke(base_llm, schema_cls: Type[T], prompt: str) -> T:

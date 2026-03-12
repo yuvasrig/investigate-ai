@@ -19,14 +19,14 @@ import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
 
 const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <AuthProvider>
-        <AnalysisProvider>
-          <Toaster />
-          <Sonner />
-          <BrowserRouter>
-            <ErrorBoundary>
+  <ErrorBoundary>
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <AuthProvider>
+          <AnalysisProvider>
+            <Toaster />
+            <Sonner />
+            <BrowserRouter>
               <Routes>
                 <Route path="/" element={<Landing />} />
                 <Route path="/loading" element={<Loading />} />
@@ -38,12 +38,12 @@ const App = () => (
                 <Route path="/register" element={<RegisterPage />} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
-            </ErrorBoundary>
-          </BrowserRouter>
-        </AnalysisProvider>
-      </AuthProvider>
-    </TooltipProvider>
-  </QueryClientProvider>
+            </BrowserRouter>
+          </AnalysisProvider>
+        </AuthProvider>
+      </TooltipProvider>
+    </QueryClientProvider>
+  </ErrorBoundary>
 );
 
 export default App;

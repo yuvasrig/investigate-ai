@@ -8,6 +8,7 @@ import { TrafficLight } from "@/components/TrafficLight";
 import { PortfolioExposure, ExposureData } from "@/components/PortfolioExposure";
 import DynamicIntentBadge from "@/components/DynamicIntentBadge";
 import EvaluatedScenariosMatrix from "@/components/EvaluatedScenariosMatrix";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
   AgentEvidenceScore,
   BearAnalysis,
@@ -45,6 +46,61 @@ const ANALYST_ROLES = {
   },
 };
 
+const AGENT_ROLES_TAB = [
+  {
+    key: "bull",
+    title: "Bull Analyst",
+    subtitle: "Senior Equity Analyst",
+    accent: "text-bull bg-bull/10",
+    role:
+      "Builds the strongest upside case for the stock using growth quality, competitive moats, and valuation support.",
+    focusesOn: [
+      "Competitive advantages and defensibility",
+      "Growth catalysts and earnings momentum",
+      "Best-case target price and timeline",
+    ],
+  },
+  {
+    key: "bear",
+    title: "Bear Analyst",
+    subtitle: "Veteran Short Seller",
+    accent: "text-bear bg-bear/10",
+    role:
+      "Builds the strongest downside case by stress-testing assumptions and identifying structural risks.",
+    focusesOn: [
+      "Valuation concerns and downside asymmetry",
+      "Competitive and execution threats",
+      "Worst-case target price and timeline",
+    ],
+  },
+  {
+    key: "strategist",
+    title: "Portfolio Strategist",
+    subtitle: "Head of Portfolio Construction",
+    accent: "text-strategist bg-strategist/10",
+    role:
+      "Translates the debate into position sizing and portfolio fit while managing concentration risk.",
+    focusesOn: [
+      "Current and indirect exposure",
+      "Diversification and concentration limits",
+      "Recommended allocation and alternatives",
+    ],
+  },
+  {
+    key: "cio",
+    title: "CIO / Judge",
+    subtitle: "Chief Investment Officer",
+    accent: "text-accent bg-accent/10",
+    role:
+      "Makes the final decision by weighing conviction against evidence quality across all agents.",
+    focusesOn: [
+      "Evidence-weighted winner selection",
+      "Final action, amount, and confidence",
+      "Entry strategy, risk management, and key factors",
+    ],
+  },
+] as const;
+
 // ── Analyst "About" toggle card ───────────────────────────────────────────────
 function AnalystAbout({ role }: { role: "bull" | "bear" | "strategist" }) {
   const [open, setOpen] = useState(false);
@@ -70,6 +126,38 @@ function AnalystAbout({ role }: { role: "bull" | "bear" | "strategist" }) {
 }
 
 // ── Warning banner ────────────────────────────────────────────────────────────
+function AgentRolesTab() {
+  return (
+    <Card className="shadow-sm mb-8">
+      <CardContent className="p-6">
+        <h3 className="text-lg font-semibold text-foreground mb-2">What Each Agent Does</h3>
+        <p className="text-sm text-muted-foreground mb-5">
+          Bull, Bear, Strategist, and CIO each have distinct mandates so the final call is made after structured debate.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {AGENT_ROLES_TAB.map((agent) => (
+            <div key={agent.key} className="rounded-lg border border-border p-4">
+              <div className="flex items-center justify-between mb-2 gap-2">
+                <h4 className="text-sm font-semibold text-foreground">{agent.title}</h4>
+                <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${agent.accent}`}>
+                  {agent.subtitle}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed mb-3">{agent.role}</p>
+              <p className="text-xs font-semibold text-foreground mb-1.5">Primary Focus</p>
+              <ul className="space-y-1">
+                {agent.focusesOn.map((line) => (
+                  <li key={line} className="text-xs text-muted-foreground">• {line}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function WarningBanner({
   trafficColor,
   concentrationRisk,
@@ -603,25 +691,16 @@ const Results = () => {
             {currentPrice != null ? ` · $${currentPrice.toLocaleString()}` : ""}
           </p>
         </div>
-
-        {/* ── ⚠️ Risk / Concentration Warning ─────────────────────────────── */}
-        <WarningBanner
-          trafficColor={traffic_light?.color}
-          concentrationRisk={strategist_analysis.concentration_risk}
-        />
-
-        {/* ── Traffic Light ────────────────────────────────────────────────── */}
-        {traffic_light && (
-          <div className="mb-6">
-            <TrafficLight trafficLight={traffic_light} />
-          </div>
-        )}
-
-        <div className="mb-6">
-          <DynamicIntentBadge scenarios={routedScenarios} />
-        </div>
-
         {/* ── Final Recommendation — shown FIRST ──────────────────────────── */}
+        <Tabs defaultValue="analysis" className="mb-2">
+          <TabsList className="mb-6">
+            <TabsTrigger value="analysis">Analysis</TabsTrigger>
+            <TabsTrigger value="roles">Agent Roles</TabsTrigger>
+          </TabsList>
+          <TabsContent value="roles">
+            <AgentRolesTab />
+          </TabsContent>
+          <TabsContent value="analysis">
         <Card className="border-l-4 border-l-accent shadow-sm mb-8">
           <CardContent className="p-6">
             <div className="flex items-center justify-between mb-5">
@@ -692,16 +771,21 @@ const Results = () => {
           </CardContent>
         </Card>
 
-        {/* ── Portfolio Hidden Exposure ──────────────────────────────────────── */}
-        {portfolio_exposure && (
+        <WarningBanner
+          trafficColor={traffic_light?.color}
+          concentrationRisk={strategist_analysis.concentration_risk}
+        />
+
+        {traffic_light && (
           <div className="mb-6">
-            <PortfolioExposure
-              exposure={portfolio_exposure as ExposureData}
-              ticker={ticker}
-              proposedAmount={proposedAmount}
-            />
+            <TrafficLight trafficLight={traffic_light} />
           </div>
         )}
+
+        <div className="mb-6">
+          <DynamicIntentBadge scenarios={routedScenarios} />
+        </div>
+
 
         {final_recommendation.evaluated_scenarios.length > 0 && (
           <div className="mb-8">
@@ -753,6 +837,20 @@ const Results = () => {
             </div>
           </CardContent>
         </Card>
+
+        {/* Portfolio Hidden Exposure (moved to bottom) */}
+        {portfolio_exposure && (
+          <div className="mb-6">
+            <PortfolioExposure
+              exposure={portfolio_exposure as ExposureData}
+              ticker={ticker}
+              proposedAmount={proposedAmount}
+            />
+          </div>
+        )}
+
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   );

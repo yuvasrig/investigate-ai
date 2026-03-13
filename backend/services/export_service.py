@@ -38,6 +38,13 @@ def _claim_text(item: Any) -> str:
     return _safe(item)
 
 
+def _claim_speculative(item: Any) -> bool:
+    """Return True if this VerifiedClaim is speculative (ungrounded)."""
+    if isinstance(item, dict):
+        return bool(item.get("is_speculative", False))
+    return False
+
+
 def _money(v: Any) -> str:
     try:
         return f"${float(v):,.0f}"
@@ -144,6 +151,109 @@ class _PDF(FPDF):
         self.multi_cell(available, 5, _printable(text))
         self.set_x(x0)
 
+    def verified_bullet(self, text: str, is_speculative: bool,
+                         dot_color: tuple[int, int, int] = _MUTED_RGB):
+        """Bullet item with [SEC] or [SPEC] grounding badge after the text."""
+        indent = 5
+        badge_w = 18
+        x0 = self.l_margin
+        y0 = self.get_y()
+        available = self.w - self.r_margin - (x0 + indent + badge_w)
+
+        # Dot
+        self.set_xy(x0, y0)
+        self.set_font("Helvetica", "", 8)
+        self.set_text_color(*dot_color)
+        self.cell(indent, 5, "-", ln=False)
+
+        # Text
+        self.set_xy(x0 + indent, y0)
+        self.set_font("Helvetica", "", 8)
+        self.set_text_color(*_DARK_RGB)
+        self.multi_cell(available, 5, _printable(text))
+        text_end_y = self.get_y()
+
+        # Badge on the first line
+        badge = "[SPEC]" if is_speculative else "[SEC]"
+        badge_rgb = _MUTED_RGB if is_speculative else (34, 197, 94)
+        self.set_xy(self.w - self.r_margin - badge_w, y0)
+        self.set_font("Helvetica", "B", 6)
+        self.set_text_color(*badge_rgb)
+        self.cell(badge_w, 5, badge, align="R", ln=False)
+
+        self.set_xy(x0, max(text_end_y, y0 + 5))
+
+    def evidence_table(self, ea: dict):
+        """Render a 3-column evidence scoring grid."""
+        _GREEN_RGB = (34, 197, 94)
+        label_w = 60
+        col_w   = 37
+
+        agents = [
+            ("Bull",       ea.get("bull") or {},       _BULL_RGB),
+            ("Bear",       ea.get("bear") or {},       _BEAR_RGB),
+            ("Strategist", ea.get("strategist") or {}, _STRAT_RGB),
+        ]
+        dimensions = [
+            ("data_citations",    "Data Citations"),
+            ("calculation_rigor", "Calculation Rigor"),
+            ("historical_precedent", "Historical Precedent"),
+            ("counterargument",   "Counterargument Strength"),
+        ]
+
+        # Header row
+        x0 = self.l_margin
+        self.set_xy(x0, self.get_y())
+        self.set_font("Helvetica", "B", 8)
+        self.cell(label_w, 5, "", ln=False)
+        for name, _, rgb in agents:
+            self.set_text_color(*rgb)
+            self.cell(col_w, 5, name, align="C", ln=False)
+        self.ln(6)
+
+        # Dimension rows
+        for key, dim_label in dimensions:
+            x0 = self.l_margin
+            self.set_xy(x0, self.get_y())
+            self.set_font("Helvetica", "", 8)
+            self.set_text_color(*_MUTED_RGB)
+            self.cell(label_w, 5, _printable(dim_label), ln=False)
+            for _, scores, _ in agents:
+                val = scores.get(key, 0)
+                self.set_font("Helvetica", "B", 8)
+                self.set_text_color(*_DARK_RGB)
+                self.cell(col_w, 5, f"{val}/10", align="C", ln=False)
+            self.ln(5)
+
+        # Total row (highlighted)
+        self.ln(1)
+        self.set_draw_color(*_RULE_RGB)
+        self.set_line_width(0.25)
+        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
+        self.ln(2)
+        x0 = self.l_margin
+        self.set_xy(x0, self.get_y())
+        self.set_font("Helvetica", "B", 8)
+        self.set_text_color(*_DARK_RGB)
+        self.cell(label_w, 5, "TOTAL", ln=False)
+        for _, scores, rgb in agents:
+            total = scores.get("total", 0)
+            self.set_text_color(*rgb)
+            self.cell(col_w, 5, f"{total}/40", align="C", ln=False)
+        self.ln(7)
+
+        # Winner + weighted scores
+        winner = ea.get("winner", "")
+        winner_r = _safe(ea.get("winner_reasoning", ""))
+        if winner:
+            self.kv("Evidence Winner", f"{winner.title()} — {winner_r}")
+        bw  = ea.get("bull_weighted")
+        brw = ea.get("bear_weighted")
+        sw  = ea.get("strategist_weighted")
+        if bw is not None:
+            self.kv("Weighted Scores",
+                    f"Bull {bw:.2f}  |  Bear {brw:.2f}  |  Strategist {sw:.2f}")
+
     def body(self, text: str):
         self.set_font("Helvetica", "", 9)
         self.set_text_color(*_MUTED_RGB)
@@ -218,6 +328,24 @@ def generate_pdf(analysis: dict) -> bytes:
     if exec_t:
         meta += f"  |  Runtime: {exec_t}s"
     pdf.cell(0, 5, _printable(meta), ln=True)
+
+    # ── Grounding sources strip ────────────────────────────────────────────────
+    rag = analysis.get("rag_summary") or {}
+    if rag:
+        parts = []
+        if rag.get("sec_docs"):
+            parts.append(f"SEC 10-K: {rag['sec_docs']} chunks")
+        if rag.get("news_docs"):
+            parts.append(f"News: {rag['news_docs']} articles")
+        if rag.get("analog_docs"):
+            parts.append(f"Analogs: {rag['analog_docs']} scenarios")
+        if not parts and rag.get("total_docs"):
+            parts.append(f"{rag['total_docs']} grounding docs")
+        if parts:
+            pdf.set_font("Helvetica", "I", 7)
+            pdf.set_text_color(*_MUTED_RGB)
+            pdf.cell(0, 4, _printable("Grounded by: " + "  |  ".join(parts)), ln=True)
+
     pdf.hr(gap_before=3, gap_after=4)
 
     # ── Executive summary ─────────────────────────────────────────────────────
@@ -251,6 +379,13 @@ def generate_pdf(analysis: dict) -> bytes:
         pct   = max(0, min(100, int(val))) if isinstance(val, (int, float)) else 0
         pdf.progress_bar(label, pct)
 
+    # ── Evidence assessment ───────────────────────────────────────────────────
+    ea = rec.get("evidence_assessment")
+    if ea:
+        pdf.hr()
+        pdf.section_header("EVIDENCE", "Evidence Quality Scoring (0-40)", _ACCENT_RGB)
+        pdf.evidence_table(ea)
+
     # ── Bull analyst ──────────────────────────────────────────────────────────
     pdf.hr()
     pdf.section_header("BULL", "Bull Analyst", _BULL_RGB)
@@ -263,13 +398,13 @@ def generate_pdf(analysis: dict) -> bytes:
     pdf.set_text_color(*_DARK_RGB)
     pdf.cell(0, 5, "Competitive Advantages", ln=True)
     for adv in (bull.get("competitive_advantages") or []):
-        pdf.bullet_item(_claim_text(adv), _BULL_RGB)
+        pdf.verified_bullet(_claim_text(adv), _claim_speculative(adv), _BULL_RGB)
 
     pdf.ln(1)
     pdf.set_font("Helvetica", "B", 8)
     pdf.cell(0, 5, "Growth Catalysts", ln=True)
     for cat in (bull.get("growth_catalysts") or []):
-        pdf.bullet_item(_claim_text(cat))
+        pdf.verified_bullet(_claim_text(cat), _claim_speculative(cat))
 
     vj = bull.get("valuation_justification")
     if vj:
@@ -288,7 +423,7 @@ def generate_pdf(analysis: dict) -> bytes:
     pdf.set_text_color(*_DARK_RGB)
     pdf.cell(0, 5, "Competition & Risks", ln=True)
     for threat in (bear.get("competition_threats") or []):
-        pdf.bullet_item(_claim_text(threat), _BEAR_RGB)
+        pdf.verified_bullet(_claim_text(threat), _claim_speculative(threat), _BEAR_RGB)
 
     vc = bear.get("valuation_concerns")
     if vc:

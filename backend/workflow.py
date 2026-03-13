@@ -25,12 +25,10 @@ from typing import TypedDict, Optional, Any, Callable, TypeVar
 
 from langgraph.graph import StateGraph, END
 
-from schemas import BullAnalysis, BearAnalysis, StrategistAnalysis, JudgeRecommendation, IntentRouterResult
+from schemas import BullAnalysis, BearAnalysis, StrategistAnalysis, JudgeRecommendation
 from agents import run_bull_agent, run_bear_agent, run_strategist_agent, run_judge_agent
-from agents.intent_router import route_intent
 from tools import fetch_full_market_data
 from rag.retriever import ingest_ticker, retrieve_all_agents
-from sec_fetcher import get_latest_10k, get_sec_grounding_context
 
 T = TypeVar("T")
 
@@ -45,10 +43,6 @@ class InvestmentState(TypedDict):
     risk_tolerance: str
     time_horizon: str
     analysis_action: str  # "buy" | "sell" | "hold"
-    user_query: Optional[str] # Triggering narrative
-
-    # Intent routing
-    intent: Optional[IntentRouterResult]
 
     # Live market snapshot (populated by fetch_data node)
     market_data: Optional[dict]
@@ -56,9 +50,6 @@ class InvestmentState(TypedDict):
     # Per-agent RAG context strings (populated by rag_ingest node)
     rag_context: Optional[dict[str, str]]   # {"bull": str, "bear": str, ...}
     rag_summary: Optional[dict]              # {"sec": N, "news": M, "cache_hit": bool}
-
-    # SEC 10-K filing metadata (populated by rag_ingest node)
-    sec_filing: Optional[dict]              # {filing_url, viewer_url, filing_date, section_urls}
 
     # Agent outputs
     bull_analysis: Optional[BullAnalysis]
@@ -68,6 +59,9 @@ class InvestmentState(TypedDict):
 
     # Gated grounding flag
     grounding_triggered: Optional[bool]
+    
+    # Synchronization flag for parallel execution
+    sync_complete: Optional[bool]
 
 
 # ── Node 1 — Live market data ─────────────────────────────────────────────────
@@ -76,17 +70,6 @@ def fetch_data_node(state: InvestmentState) -> dict[str, Any]:
     """Pull ~35 real-time fields from yfinance before any agent runs."""
     market_data = fetch_full_market_data(state["ticker"])
     return {"market_data": market_data}
-
-
-# ── Node 1.5 — Intent Routing (Tier 2) ────────────────────────────────────────
-
-def intent_router_node(state: InvestmentState) -> dict[str, Any]:
-    """Parse free-text query into structured scenarios if provided."""
-    query = state.get("user_query")
-    if not query:
-        return {"intent": IntentRouterResult(target_asset=state["ticker"], scenarios=[], requires_deep_dive=True)}
-    intent = route_intent(query)
-    return {"intent": intent}
 
 
 # ── Node 2 — RAG ingestion & retrieval ───────────────────────────────────────
@@ -102,24 +85,10 @@ def rag_node(state: InvestmentState) -> dict[str, Any]:
     ticker = state["ticker"]
     market_data = state["market_data"] or {}
 
-    intent = state.get("intent")
-    scenarios = intent.scenarios if intent else []
-
     rag_summary = ingest_ticker(ticker, market_data)
-    rag_context = retrieve_all_agents(ticker, scenarios=scenarios)
+    rag_context = retrieve_all_agents(ticker)
 
-    # SEC 10-K grounding — fetch in parallel with RAG (non-blocking; None if unavailable)
-    sec_filing = get_latest_10k(ticker)
-    sec_context = get_sec_grounding_context(ticker)
-
-    # Prepend SEC grounding to every agent's RAG context block
-    if sec_context:
-        rag_context = {
-            role: sec_context + "\n\n" + ctx
-            for role, ctx in rag_context.items()
-        }
-
-    return {"rag_context": rag_context, "rag_summary": rag_summary, "sec_filing": sec_filing}
+    return {"rag_context": rag_context, "rag_summary": rag_summary}
 
 
 # ── Node 3 — Parallel agent analysis ─────────────────────────────────────────
@@ -166,11 +135,49 @@ def _run_with_retry(
         f"{name} failed after {max_retries} attempts: {last_exc}"
     ) from last_exc
 
-def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
-    """
-    Run Bull, Bear, and Strategist concurrently.
-    Each receives live market data AND its own RAG context block.
-    """
+def bull_node(state: InvestmentState) -> dict[str, Any]:
+    ticker = state["ticker"]
+    amount = state["amount"]
+    portfolio_value = state["portfolio_value"]
+    analysis_action = state.get("analysis_action", "buy")
+    market_data = state["market_data"] or {}
+    rag = state.get("rag_context") or {}
+
+    bull = _run_with_retry(
+        "Bull Analyst",
+        BullAnalysis,
+        run_bull_agent,
+        ticker,
+        market_data,
+        rag.get("bull", ""),
+        amount,
+        portfolio_value,
+        analysis_action,
+    )
+    return {"bull_analysis": bull}
+
+def bear_node(state: InvestmentState) -> dict[str, Any]:
+    ticker = state["ticker"]
+    amount = state["amount"]
+    portfolio_value = state["portfolio_value"]
+    analysis_action = state.get("analysis_action", "buy")
+    market_data = state["market_data"] or {}
+    rag = state.get("rag_context") or {}
+
+    bear = _run_with_retry(
+        "Bear Analyst",
+        BearAnalysis,
+        run_bear_agent,
+        ticker,
+        market_data,
+        rag.get("bear", ""),
+        amount,
+        portfolio_value,
+        analysis_action,
+    )
+    return {"bear_analysis": bear}
+
+def strategist_node(state: InvestmentState) -> dict[str, Any]:
     ticker = state["ticker"]
     amount = state["amount"]
     portfolio_value = state["portfolio_value"]
@@ -178,53 +185,17 @@ def parallel_analysis_node(state: InvestmentState) -> dict[str, Any]:
     analysis_action = state.get("analysis_action", "buy")
     market_data = state["market_data"] or {}
     rag = state.get("rag_context") or {}
-    intent = state.get("intent")
-    scenarios = intent.scenarios if intent else []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-        bull_fut = ex.submit(
-            _run_with_retry,
-            "Bull Analyst",
-            BullAnalysis,
-            run_bull_agent,
-            ticker,
-            market_data,
-            rag.get("bull", ""),
-            amount,
-            portfolio_value,
-            analysis_action,
-            scenarios,
-        )
-        bear_fut = ex.submit(
-            _run_with_retry,
-            "Bear Analyst",
-            BearAnalysis,
-            run_bear_agent,
-            ticker,
-            market_data,
-            rag.get("bear", ""),
-            amount,
-            portfolio_value,
-            analysis_action,
-            scenarios,
-        )
-        strategist_fut = ex.submit(
-            _run_with_retry,
-            "Portfolio Strategist",
-            StrategistAnalysis,
-            run_strategist_agent,
-            ticker, amount, portfolio_value, risk_tolerance,
-            market_data, rag.get("strategist", ""), None, analysis_action, scenarios,
-        )
-        bull = bull_fut.result()
-        bear = bear_fut.result()
-        strategist = strategist_fut.result()
+    strategist = _run_with_retry(
+        "Portfolio Strategist",
+        StrategistAnalysis,
+        run_strategist_agent,
+        ticker, amount, portfolio_value, risk_tolerance,
+        market_data, rag.get("strategist", ""), None, analysis_action,
+    )
+    return {"strategist_analysis": strategist}
 
-    return {
-        "bull_analysis": bull,
-        "bear_analysis": bear,
-        "strategist_analysis": strategist,
-    }
+# (Threadpool executor removed in favor of separate nodes)
 
 
 # ── Node 4 — Gated grounding (conditional) ───────────────────────────────────
@@ -302,9 +273,6 @@ def judge_node(state: InvestmentState) -> dict[str, Any]:
             + ", ".join(missing)
         )
 
-    intent = state.get("intent")
-    scenarios = intent.scenarios if intent else []
-
     # Type narrowing for static analyzers; runtime already validated above.
     assert bull is not None and bear is not None and strategist is not None
 
@@ -319,7 +287,6 @@ def judge_node(state: InvestmentState) -> dict[str, Any]:
         state["market_data"] or {},
         rag.get("judge", ""),
         state.get("analysis_action", "buy"),
-        scenarios,
         max_retries=_JUDGE_MAX_RETRIES,
     )
     return {"final_recommendation": recommendation}
@@ -331,18 +298,33 @@ def build_workflow() -> Any:
     graph = StateGraph(InvestmentState)
 
     graph.add_node("fetch_data", fetch_data_node)
-    graph.add_node("intent_router", intent_router_node)
     graph.add_node("rag_ingest", rag_node)
-    graph.add_node("parallel_analysis", parallel_analysis_node)
+    graph.add_node("bull_node", bull_node)
+    graph.add_node("bear_node", bear_node)
+    graph.add_node("strategist_node", strategist_node)
     graph.add_node("verify_facts", verify_facts_node)
     graph.add_node("judge", judge_node)
 
     graph.set_entry_point("fetch_data")
-    graph.add_edge("fetch_data", "intent_router")
-    graph.add_edge("intent_router", "rag_ingest")
-    graph.add_edge("rag_ingest", "parallel_analysis")
+    graph.add_edge("fetch_data", "rag_ingest")
+    
+    # Fan out to parallel agent nodes
+    graph.add_edge("rag_ingest", "bull_node")
+    graph.add_edge("rag_ingest", "bear_node")
+    graph.add_edge("rag_ingest", "strategist_node")
+    
+    # Conditional logic requires waiting for all 3 agents to finish.
+    # We create a dummy synchronization node to easily collect the parallel states.
+    def sync_node(state: InvestmentState) -> dict[str, Any]:
+        return {"sync_complete": True}
+    
+    graph.add_node("sync", sync_node)
+    graph.add_edge("bull_node", "sync")
+    graph.add_edge("bear_node", "sync")
+    graph.add_edge("strategist_node", "sync")
+    
     graph.add_conditional_edges(
-        "parallel_analysis",
+        "sync",
         route_after_analysis,
         {"verify_facts": "verify_facts", "judge": "judge"},
     )
@@ -371,7 +353,6 @@ def run_analysis(
     risk_tolerance: str,
     time_horizon: str,
     analysis_action: str = "buy",
-    user_query: Optional[str] = None,
 ) -> InvestmentState:
     """Execute the full grounded + RAG investment analysis workflow."""
     initial_state: InvestmentState = {
@@ -380,13 +361,10 @@ def run_analysis(
         "portfolio_value": portfolio_value,
         "risk_tolerance": risk_tolerance,
         "time_horizon": time_horizon,
-        "user_query": user_query,
         "analysis_action": analysis_action,
-        "intent": None,
         "market_data": None,
         "rag_context": None,
         "rag_summary": None,
-        "sec_filing": None,
         "bull_analysis": None,
         "bear_analysis": None,
         "strategist_analysis": None,

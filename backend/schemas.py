@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator, EmailStr
+from pydantic import BaseModel, Field, field_validator, model_validator, EmailStr
 from typing import Optional, Literal
 
 
@@ -34,15 +34,6 @@ def _coerce_money_like_number(value):
 class VerifiedClaim(BaseModel):
     claim: str = Field(description="The analytical claim or data point")
     is_speculative: bool = Field(description="True if the claim lacks concrete verification from 10-K or grounding data")
-    sec_section: Optional[str] = Field(
-        default=None,
-        description=(
-            "SEC 10-K section this claim is sourced from. "
-            "Use one of: 'Item 1 - Business', 'Item 1A - Risk Factors', "
-            "'Item 7 - MD&A', 'Item 8 - Financial Statements'. "
-            "Null if the claim is not directly from the SEC filing."
-        ),
-    )
 
 class BullAnalysis(BaseModel):
     competitive_advantages: list[VerifiedClaim] = Field(description="Key competitive moats and advantages")
@@ -117,24 +108,18 @@ class ConfidenceBreakdown(BaseModel):
 # ── Evidence-Based Scoring ─────────────────────────────────────────────────────
 
 class AgentEvidenceScore(BaseModel):
-    """Evidence quality scores for a single analyst (0-10 each, max 40 base, -18 gated grounding penalty)."""
+    """Evidence quality scores for a single analyst (0-10 each, max 40 total)."""
     data_citations: int = Field(ge=0, le=10, description="Data Citations quality (0-10): specificity and sourcing of data points")
     calculation_rigor: int = Field(ge=0, le=10, description="Calculation Rigor (0-10): shows valuation methodology and work")
     historical_precedent: int = Field(ge=0, le=10, description="Historical Precedent (0-10): specific comparables with dates and numbers")
     counterargument: int = Field(ge=0, le=10, description="Counterargument Strength (0-10): acknowledges and addresses opposing views")
-    gated_grounding_penalty: int = Field(
-        ge=-18, le=0, default=0,
-        description=(
-            "Gated Grounding penalty (−18 to 0): "
-            "0 = all major claims cite SEC 10-K or a verified historical analog. "
-            "−9 = some claims grounded, others speculative. "
-            "−18 = core thesis relies entirely on unverified speculation with no 10-K or analog grounding."
-        ),
-    )
-    total: int = Field(
-        ge=-18, le=40,
-        description="Sum of four dimension scores plus gated_grounding_penalty (range: −18 to 40)",
-    )
+    total: int = Field(ge=0, description="Sum of all four dimension scores (max 40)")
+
+    @field_validator("total", mode="before")
+    @classmethod
+    def clamp_total(cls, v: int) -> int:
+        """Clamp LLM-generated totals to [0, 40] instead of hard-rejecting them."""
+        return min(max(int(v), 0), 40)
 
 
 class EvidenceAssessment(BaseModel):
@@ -161,7 +146,7 @@ class JudgeRecommendation(BaseModel):
     confidence_breakdown: ConfidenceBreakdown = Field(description="5-dimensional confidence breakdown")
     entry_strategy: str = Field(description="How to enter the position")
     risk_management: str = Field(description="Risk management guidance")
-    traffic_light_color: Literal["red", "yellow", "green"] = Field(description="Red if any stress scenario correlates with >2sigma drawdown, else based on overall consensus")
+    traffic_light_color: Optional[Literal["red", "yellow", "green"]] = Field(default=None, description="Red if any stress scenario correlates with >2sigma drawdown, else based on overall consensus")
     evaluated_scenarios: list[EvaluatedScenario] = Field(default_factory=list, description="List of scenarios that the Judge evaluated")
     key_factors: list[str] = Field(description="Key decision factors")
     evidence_assessment: Optional[EvidenceAssessment] = Field(
@@ -173,6 +158,20 @@ class JudgeRecommendation(BaseModel):
     @classmethod
     def parse_recommended_amount(cls, value):
         return _coerce_money_like_number(value)
+
+    @field_validator("traffic_light_color", mode="before")
+    @classmethod
+    def coerce_traffic_light(cls, v):
+        if v in ("red", "yellow", "green"):
+            return v
+        return None  # will be derived in model_validator below
+
+    @model_validator(mode="after")
+    def derive_traffic_light(self):
+        if self.traffic_light_color is None:
+            c = self.confidence_overall or 0
+            self.traffic_light_color = "green" if c >= 70 else "red" if c < 45 else "yellow"
+        return self
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -187,21 +186,8 @@ class IntentRouterResult(BaseModel):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Portfolio / request schemas & Tier 1 Scan
+# Portfolio / request schemas
 # ══════════════════════════════════════════════════════════════════════════════
-
-class PositionType(BaseModel):
-    ticker: str = Field(description="The asset ticker")
-    category: Literal["Long-Term Core", "Growth Position", "Speculative", "Income", "Cash"] = Field(description="Classification of the holding")
-    weight_pct: float = Field(description="Percentage weight in portfolio")
-    is_flagged: bool = Field(default=False, description="True if position poses concentration risk")
-
-class Tier1ScanResult(BaseModel):
-    overall_risk_score: int = Field(ge=0, le=10, description="0-10 risk score (10 = highest risk)")
-    missing_protections: list[str] = Field(description="Missing diversifiers (e.g. '0% bonds', 'No international exposure')")
-    positions: list[PositionType] = Field(description="Categorized portfolio holdings")
-    concentration_warning: Optional[str] = Field(default=None, description="Warning if any single asset or sector is too concentrated")
-
 
 class PortfolioHolding(BaseModel):
     ticker: str = Field(description="ETF or stock ticker (e.g. SPY, QQQ)")
@@ -218,10 +204,7 @@ class AnalysisRequest(BaseModel):
     portfolio: dict = Field(description="Portfolio info with total_value key")
     risk_tolerance: str = Field(description="Risk tolerance: conservative, moderate, aggressive")
     time_horizon: str = Field(description="Investment time horizon (e.g. '1Y', '3Y', '5Y')")
-    user_query: Optional[str] = Field(
-        default=None,
-        description="Optional natural-language query used by the Tier 2 intent router",
-    )
+    user_query: Optional[str] = Field(default=None, description="Free-text intent query from the user")
     analysis_action: Literal["buy", "sell", "hold"] = Field(
         default="buy",
         description="Action to debate: buy (buy more), sell (exit position), hold (maintain position)"
@@ -262,16 +245,11 @@ class AnalysisResponse(BaseModel):
     bear_analysis: BearAnalysis
     strategist_analysis: StrategistAnalysis
     final_recommendation: JudgeRecommendation
-    intent: Optional[IntentRouterResult] = None
     market_data: Optional[dict] = None
     rag_summary: Optional[dict] = None
     traffic_light: Optional[TrafficLightResult] = None
     portfolio_exposure: Optional[dict] = None
-    kelly_sizing: Optional[KellySizingResult] = None
-    sec_filing: Optional[dict] = Field(
-        default=None,
-        description="SEC 10-K filing metadata: {filing_url, viewer_url, filing_date, section_urls}",
-    )
+    kelly_sizing: Optional[KellySizingResult] = None   # NEW
     execution_time: float
     timestamp: str
 
@@ -339,6 +317,36 @@ class AlertCreate(BaseModel):
 class AlertResponse(BaseModel):
     id: str
     user_id: str
+    ticker: str
+    alert_type: str
+    threshold: Optional[float]
+    message: Optional[str]
+    is_active: bool
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tax harvesting schemas
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TaxHarvestRequest(BaseModel):
+    holdings: list[PortfolioHolding] = Field(description="Holdings with cost_basis for analysis")
+    tax_year: Optional[int] = Field(default=None, description="Tax year (defaults to current year)")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Plaid schemas
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PlaidExchangeRequest(BaseModel):
+    public_token: str = Field(description="Short-lived public token from Plaid Link onSuccess")
+
+
+class PlaidUserIdRequest(BaseModel):
+    user_id: str = Field(default="anonymous", description="Your internal user ID")
     ticker: str
     alert_type: str
     threshold: Optional[float]

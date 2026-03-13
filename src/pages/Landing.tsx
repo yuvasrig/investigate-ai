@@ -58,10 +58,38 @@ const AGENT_ROLES = [
 const QUERY_STOPWORDS = new Set([
   "A", "AN", "AND", "ARE", "BE", "BUY", "FOR", "HOLD", "I", "IF", "IN",
   "IS", "IT", "ME", "MY", "OF", "ON", "OR", "SELL", "SHOULD", "THE", "TO",
-  "WE", "WHAT", "WHY", "WITH", "YOU",
+  "WE", "WHAT", "WHY", "WITH", "YOU", "WANT", "WOULD", "LIKE"
 ]);
 
+const COMPANY_MAP: Record<string, string> = {
+  nvidia: "NVDA", nvda: "NVDA",
+  tesla: "TSLA", tsla: "TSLA",
+  apple: "AAPL", aapl: "AAPL",
+  microsoft: "MSFT", msft: "MSFT",
+  amazon: "AMZN", amzn: "AMZN",
+  google: "GOOGL", alphabet: "GOOGL", googl: "GOOGL",
+  meta: "META", facebook: "META",
+  gamestop: "GME", gme: "GME",
+  spy: "SPY", qqq: "QQQ", voo: "VOO", vti: "VTI",
+  netflix: "NFLX", nflx: "NFLX",
+  accenture: "ACN", acn: "ACN",
+  palantir: "PLTR", pltr: "PLTR",
+  amd: "AMD",
+  intel: "INTC", intc: "INTC"
+};
+
 function extractTickerFromText(input: string): string {
+  const lowerInput = input.toLowerCase();
+  // 1) Explicit mapping check
+  for (const [name, ticker] of Object.entries(COMPANY_MAP)) {
+    // Only match whole words to prevent accidental substring matches
+    const regex = new RegExp(`\\b${name}\\b`, 'i');
+    if (regex.test(input)) {
+      return ticker;
+    }
+  }
+
+  // 2) Fallback to regex token extraction
   const tokens = input.match(/\b[A-Za-z]{1,5}\b/g) ?? [];
   // Prefer ALL_CAPS tokens (2+ chars) — these look like ticker symbols (e.g. ACN, NVDA)
   for (const token of tokens) {
@@ -87,7 +115,7 @@ function PortfolioChart({ data, positive }: { data: GrowthPoint[]; positive: boo
       <AreaChart data={data} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
         <defs>
           <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%"  stopColor={color} stopOpacity={0.25} />
+            <stop offset="5%" stopColor={color} stopOpacity={0.25} />
             <stop offset="95%" stopColor={color} stopOpacity={0} />
           </linearGradient>
         </defs>
@@ -244,8 +272,8 @@ export default function Landing() {
   const navigate = useNavigate();
   const { setFormData, setAnalysisAction, setPlaidHoldings } = useAnalysis();
 
-  const [portfolio, setPortfolio]           = useState<Portfolio | null>(null);
-  const [loading, setLoading]               = useState(true);
+  const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
+  const [loading, setLoading] = useState(true);
   const [portfolioReport, setPortfolioReport] = useState<PortfolioReport | null>(null);
 
   // Which holding row is expanded
@@ -446,8 +474,8 @@ export default function Landing() {
                       key={a}
                       onClick={() => setSelectedAction(a)}
                       className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border text-xs font-semibold transition-all ${selectedAction === a
-                          ? `${cfg.color} ${cfg.border} bg-muted/40`
-                          : "border-border text-muted-foreground hover:text-foreground"
+                        ? `${cfg.color} ${cfg.border} bg-muted/40`
+                        : "border-border text-muted-foreground hover:text-foreground"
                         }`}
                     >
                       <Icon className="w-4 h-4" />
@@ -497,9 +525,8 @@ export default function Landing() {
                     <h1 className="text-4xl font-bold tracking-tight text-gray-900 mb-1 tabular-nums">
                       $<CountUp end={portfolio?.total_value ?? 0} duration={1.2} separator="," decimals={0} />
                     </h1>
-                    <div className={`inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-1 rounded-full ${
-                      totalGainPct >= 0 ? "text-green-600 bg-green-50" : "text-red-600 bg-red-50"
-                    }`}>
+                    <div className={`inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-1 rounded-full ${totalGainPct >= 0 ? "text-green-600 bg-green-50" : "text-red-600 bg-red-50"
+                      }`}>
                       {totalGainPct >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
                       {totalGainPct >= 0 ? "+" : ""}{totalGainPct.toFixed(2)}%
                     </div>
@@ -661,11 +688,10 @@ export default function Landing() {
                               <button
                                 key={a}
                                 onClick={() => setSelectedAction(a)}
-                                className={`flex flex-col items-center gap-1.5 py-3 rounded-xl border font-semibold text-xs transition-all ${
-                                  isActive
+                                className={`flex flex-col items-center gap-1.5 py-3 rounded-xl border font-semibold text-xs transition-all ${isActive
                                     ? `${cfg.color} ${cfg.border} bg-white shadow-sm`
                                     : "border-gray-200 text-gray-500 hover:text-gray-700 bg-white"
-                                }`}
+                                  }`}
                               >
                                 <Icon className="w-4 h-4" />
                                 {cfg.label}

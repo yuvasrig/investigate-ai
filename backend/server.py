@@ -1,4 +1,3 @@
-import json
 import time
 import uuid
 from datetime import datetime, timezone
@@ -19,9 +18,11 @@ from schemas import (
     AnalysisRequest, AnalysisResponse, TrafficLightResult, KellySizingResult,
     RegisterRequest, LoginRequest, TokenResponse, UserResponse,
     WatchlistCreate, WatchlistResponse, AlertCreate, AlertResponse,
-    TaxHarvestRequest, IntentRouterResult
+    TaxHarvestRequest,
 )
-from workflow import run_analysis
+from workflow import get_workflow, InvestmentState
+import json
+import asyncio
 from llm_factory import health_check as llm_health_check
 from database import create_tables, get_db, User, Watchlist, Alert
 from services.storage_service import save_analysis, get_analysis, list_analyses
@@ -169,9 +170,177 @@ def providers():
     return config.summary()
 
 
-@app.post("/analyze", response_model=AnalysisResponse)
+@app.post("/analyze/stream")
 @limiter.limit("30/minute")
-def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_db)):
+async def analyze_stream(request: Request, body: AnalysisRequest, db: Session = Depends(get_db)):
+    """Streaming endpoint for real-time progress updates via SSE."""
+    ticker = body.ticker.strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="Ticker is required")
+        
+    portfolio_value = body.portfolio.get("total_value", 0.0)
+    if portfolio_value <= 0:
+        raise HTTPException(status_code=400, detail="Portfolio total_value must be positive")
+
+    initial_state: InvestmentState = {
+        "ticker": ticker,
+        "amount": body.amount,
+        "portfolio_value": portfolio_value,
+        "risk_tolerance": body.risk_tolerance,
+        "time_horizon": body.time_horizon,
+        "analysis_action": body.analysis_action,
+        "market_data": None,
+        "rag_context": None,
+        "rag_summary": None,
+        "bull_analysis": None,
+        "bear_analysis": None,
+        "strategist_analysis": None,
+        "final_recommendation": None,
+        "grounding_triggered": False,
+    }
+
+    async def event_generator():
+        graph = get_workflow()
+        start = time.time()
+        final_state = None
+        
+        try:
+            # Requires langchain-core >= 0.1.52 for astream_events v2
+            async for event in graph.astream_events(initial_state, version="v2"):
+                # Handle connection drop
+                if await request.is_disconnected():
+                    break
+                    
+                kind = event["event"]
+                # We specifically look for when nodes FINISH to update progress bars
+                if kind == "on_chain_end":
+                    node_name = event["name"]
+                    
+                    if node_name == "fetch_data":
+                        yield f"data: {json.dumps({'status': 'Data Fetched'})}\n\n"
+                    elif node_name == "rag_ingest":
+                        yield f"data: {json.dumps({'status': 'RAG Complete'})}\n\n"
+                    elif node_name == "bull_node":
+                        yield f"data: {json.dumps({'agent': 'bull', 'status': 'complete'})}\n\n"
+                    elif node_name == "bear_node":
+                        yield f"data: {json.dumps({'agent': 'bear', 'status': 'complete'})}\n\n"
+                    elif node_name == "strategist_node":
+                        yield f"data: {json.dumps({'agent': 'strategist', 'status': 'complete'})}\n\n"
+                    elif node_name == "judge":
+                        yield f"data: {json.dumps({'agent': 'judge', 'status': 'complete'})}\n\n"
+                    elif node_name == "LangGraph":
+                        # This happens when the entire graph finishes
+                        final_state = event["data"]["output"]
+                        
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            return
+
+        if not final_state:
+            yield f"data: {json.dumps({'error': 'Graph did not return a final state'})}\n\n"
+            return
+            
+        # Compile final response identical to old sync endpoint
+        elapsed = round(time.time() - start, 2)
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        analysis_id = str(uuid.uuid4())
+        
+        traffic_light = _compute_traffic_light(
+            final_state["bull_analysis"],
+            final_state["bear_analysis"],
+            final_state["final_recommendation"],
+        )
+        
+        kelly_sizing = None
+        try:
+            kelly_dict = compute_kelly_sizing(
+                bull_analysis=final_state["bull_analysis"],
+                bear_analysis=final_state["bear_analysis"],
+                strategist_analysis=final_state["strategist_analysis"],
+                market_data=final_state.get("market_data") or {},
+                proposed_amount=body.amount,
+                portfolio_value=portfolio_value,
+            )
+            kelly_sizing = KellySizingResult(**kelly_dict)
+        except Exception:
+            kelly_sizing = None
+            
+        portfolio_exposure = None
+        holdings_input = body.portfolio_holdings
+        if holdings_input:
+            try:
+                portfolio_exposure = calculate_hidden_exposure(
+                    portfolio=[h.model_dump() for h in holdings_input],
+                    target_ticker=ticker,
+                    proposed_amount=body.amount,
+                )
+            except Exception:
+                portfolio_exposure = None
+                
+        # Send FINAL result payload so frontend can navigate to /results
+        try:
+            response = AnalysisResponse(
+                analysis_id=analysis_id,
+                llm_provider=config.PROVIDER.value,
+                ticker=ticker,
+                bull_analysis=final_state["bull_analysis"],
+                bear_analysis=final_state["bear_analysis"],
+                strategist_analysis=final_state["strategist_analysis"],
+                final_recommendation=final_state["final_recommendation"],
+                intent=None,
+                market_data=final_state.get("market_data"),
+                rag_summary=final_state.get("rag_summary"),
+                traffic_light=traffic_light,
+                portfolio_exposure=portfolio_exposure,
+                kelly_sizing=kelly_sizing,
+                execution_time=elapsed,
+                timestamp=timestamp,
+            )
+        except ValidationError as e:
+            yield f"data: {json.dumps({'error': f'Validation error: {e.errors()}'})}\n\n"
+            return
+            
+        response_dict = response.model_dump()
+        
+        try:
+            from database import SessionLocal
+            with SessionLocal() as session:
+                save_analysis(
+                    session, analysis_id, response_dict,
+                    amount=body.amount, portfolio_value=portfolio_value,
+                    risk_tolerance=body.risk_tolerance, time_horizon=body.time_horizon
+                )
+        except Exception as e:
+            print(f"Error saving stream analysis to memory: {e}")
+            
+        # Cache outcome
+        portfolio_holdings_key = "none"
+        if body.portfolio_holdings:
+            portfolio_holdings_key = "-".join(sorted(f"{h.ticker}:{h.value}" for h in body.portfolio_holdings))
+        
+        set_cached(
+            ticker, 
+            body.amount, 
+            portfolio_value, 
+            body.risk_tolerance, 
+            body.time_horizon, 
+            body.user_query or "",
+            body.analysis_action or "buy",
+            portfolio_holdings_key,
+            response_dict
+        )
+        
+        # We must serialize to a dict, because SSE expects strings
+        # "type": "result" tells the frontend this is the payload to render.
+        yield f"data: {json.dumps({'type': 'result', 'payload': response_dict})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.post("/analyze")
+@limiter.limit("30/minute")
+async def analyze_sync(request: Request, body: AnalysisRequest, db: Session = Depends(get_db)):
+    """Synchronous (non-streaming) analysis endpoint. Returns full AnalysisResponse JSON."""
     ticker = body.ticker.strip().upper()
     if not ticker:
         raise HTTPException(status_code=400, detail="Ticker is required")
@@ -180,61 +349,65 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
     if portfolio_value <= 0:
         raise HTTPException(status_code=400, detail="Portfolio total_value must be positive")
 
-    holdings_cache_key = ""
+    # Check cache first
+    portfolio_holdings_key = "none"
     if body.portfolio_holdings:
-        holdings_cache_key = json.dumps(
-            [holding.model_dump() for holding in body.portfolio_holdings],
-            sort_keys=True,
-        )
+        portfolio_holdings_key = "-".join(sorted(f"{h.ticker}:{h.value}" for h in body.portfolio_holdings))
 
-    # ── Cache check ───────────────────────────────────────────────────────────
     cached = get_cached(
-        ticker,
-        body.amount,
-        portfolio_value,
-        body.risk_tolerance,
-        body.time_horizon,
-        body.user_query or "",
-        body.analysis_action,
-        holdings_cache_key,
+        ticker, body.amount, portfolio_value,
+        body.risk_tolerance, body.time_horizon,
+        body.user_query or "", body.analysis_action or "buy",
+        portfolio_holdings_key,
     )
     if cached:
-        return AnalysisResponse(**cached)
+        return cached
 
+    initial_state: InvestmentState = {
+        "ticker": ticker,
+        "amount": body.amount,
+        "portfolio_value": portfolio_value,
+        "risk_tolerance": body.risk_tolerance,
+        "time_horizon": body.time_horizon,
+        "analysis_action": body.analysis_action,
+        "market_data": None,
+        "rag_context": None,
+        "rag_summary": None,
+        "bull_analysis": None,
+        "bear_analysis": None,
+        "strategist_analysis": None,
+        "final_recommendation": None,
+        "grounding_triggered": False,
+    }
+
+    graph = get_workflow()
     start = time.time()
 
     try:
-        result = run_analysis(
-            ticker=ticker,
-            amount=body.amount,
-            portfolio_value=portfolio_value,
-            risk_tolerance=body.risk_tolerance,
-            time_horizon=body.time_horizon,
-            analysis_action=body.analysis_action,
-            user_query=body.user_query,
-        )
+        final_state = await graph.ainvoke(initial_state)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not final_state:
+        raise HTTPException(status_code=500, detail="Graph did not return a final state")
 
     elapsed = round(time.time() - start, 2)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     analysis_id = str(uuid.uuid4())
 
-    # ── Traffic light ─────────────────────────────────────────────────────────
     traffic_light = _compute_traffic_light(
-        result["bull_analysis"],
-        result["bear_analysis"],
-        result["final_recommendation"],
+        final_state["bull_analysis"],
+        final_state["bear_analysis"],
+        final_state["final_recommendation"],
     )
 
-    # ── Kelly Criterion position sizing ───────────────────────────────────────
     kelly_sizing = None
     try:
         kelly_dict = compute_kelly_sizing(
-            bull_analysis=result["bull_analysis"],
-            bear_analysis=result["bear_analysis"],
-            strategist_analysis=result["strategist_analysis"],
-            market_data=result.get("market_data") or {},
+            bull_analysis=final_state["bull_analysis"],
+            bear_analysis=final_state["bear_analysis"],
+            strategist_analysis=final_state["strategist_analysis"],
+            market_data=final_state.get("market_data") or {},
             proposed_amount=body.amount,
             portfolio_value=portfolio_value,
         )
@@ -242,13 +415,11 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
     except Exception:
         kelly_sizing = None
 
-    # ── Portfolio hidden exposure ──────────────────────────────────────────────
     portfolio_exposure = None
-    holdings_input = body.portfolio_holdings
-    if holdings_input:
+    if body.portfolio_holdings:
         try:
             portfolio_exposure = calculate_hidden_exposure(
-                portfolio=[h.model_dump() for h in holdings_input],
+                portfolio=[h.model_dump() for h in body.portfolio_holdings],
                 target_ticker=ticker,
                 proposed_amount=body.amount,
             )
@@ -260,56 +431,42 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
             analysis_id=analysis_id,
             llm_provider=config.PROVIDER.value,
             ticker=ticker,
-            bull_analysis=result["bull_analysis"],
-            bear_analysis=result["bear_analysis"],
-            strategist_analysis=result["strategist_analysis"],
-            final_recommendation=result["final_recommendation"],
-            intent=result.get("intent"),
-            market_data=result.get("market_data"),
-            rag_summary=result.get("rag_summary"),
+            bull_analysis=final_state["bull_analysis"],
+            bear_analysis=final_state["bear_analysis"],
+            strategist_analysis=final_state["strategist_analysis"],
+            final_recommendation=final_state["final_recommendation"],
+            intent=None,
+            market_data=final_state.get("market_data"),
+            rag_summary=final_state.get("rag_summary"),
             traffic_light=traffic_light,
             portfolio_exposure=portfolio_exposure,
             kelly_sizing=kelly_sizing,
-            sec_filing=result.get("sec_filing"),
             execution_time=elapsed,
             timestamp=timestamp,
         )
     except ValidationError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Analysis produced invalid model output: {e.errors()}",
-        )
+        raise HTTPException(status_code=500, detail=f"Validation error: {e.errors()}")
 
     response_dict = response.model_dump()
 
-    # ── Persist to DB ─────────────────────────────────────────────────────────
     try:
         save_analysis(
-            db,
-            analysis_id,
-            response_dict,
-            amount=body.amount,
-            portfolio_value=portfolio_value,
-            risk_tolerance=body.risk_tolerance,
-            time_horizon=body.time_horizon,
+            db, analysis_id, response_dict,
+            amount=body.amount, portfolio_value=portfolio_value,
+            risk_tolerance=body.risk_tolerance, time_horizon=body.time_horizon,
         )
-    except Exception:
-        pass  # non-fatal — analysis still returned to client
+    except Exception as e:
+        print(f"Error saving analysis to memory: {e}")
 
-    # ── Cache result ──────────────────────────────────────────────────────────
     set_cached(
-        ticker,
-        body.amount,
-        portfolio_value,
-        body.risk_tolerance,
-        body.time_horizon,
-        body.user_query or "",
-        body.analysis_action,
-        holdings_cache_key,
+        ticker, body.amount, portfolio_value,
+        body.risk_tolerance, body.time_horizon,
+        body.user_query or "", body.analysis_action or "buy",
+        portfolio_holdings_key,
         response_dict,
     )
 
-    return response
+    return response_dict
 
 
 @app.get("/analysis/{analysis_id}")
@@ -422,7 +579,7 @@ def portfolio_analyze_complete(body: dict):
     growth positions, concentration risks, and missing protections.
 
     Body: { "holdings": [...], "total_value": 80000 }
-    Returns the full Tier1ScanResult structure.
+    Returns the full PortfolioReport structure consumed by PortfolioReportCard.
     """
     try:
         report = analyze_complete_portfolio(body)
@@ -458,44 +615,6 @@ def portfolio_exposure_endpoint(body: dict):
         raise HTTPException(status_code=400, detail="ticker and holdings are required")
     exposure = calculate_hidden_exposure(holdings, ticker, amount)
     return exposure
-
-
-# ── SEC EDGAR endpoints ───────────────────────────────────────────────────────
-
-@app.get("/api/sec/{ticker}/filing")
-def sec_filing_metadata(ticker: str):
-    """Return 10-K filing metadata (URL, date, section URLs) for a ticker."""
-    filing = get_latest_10k(ticker.upper())
-    if not filing:
-        raise HTTPException(status_code=404, detail=f"No 10-K filing found for {ticker.upper()}")
-    return filing
-
-
-@app.get("/api/sec/{ticker}/excerpt")
-def sec_section_excerpt(ticker: str, section: str = "risk_factors"):
-    """
-    Return plain-text excerpt from a specific 10-K section.
-
-    ?section= one of: business | risk_factors | mda | financials
-    """
-    valid = list(SECTION_LABELS.keys())
-    if section not in valid:
-        raise HTTPException(status_code=400, detail=f"section must be one of: {valid}")
-
-    text = get_section_text(ticker.upper(), section, max_chars=5000)
-    filing = get_latest_10k(ticker.upper())
-
-    if text is None or filing is None:
-        raise HTTPException(status_code=404, detail=f"Section '{section}' not found in {ticker.upper()} 10-K")
-
-    return {
-        "ticker": ticker.upper(),
-        "section": section,
-        "section_label": SECTION_LABELS[section],
-        "filing_date": filing["filing_date"],
-        "filing_url": filing["filing_url"],
-        "text": text,
-    }
 
 
 # ── Plaid endpoints ───────────────────────────────────────────────────────────
@@ -750,6 +869,46 @@ def kelly_endpoint(body: dict):
         raise HTTPException(status_code=400, detail=f"Missing or invalid field: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── SEC EDGAR endpoints ───────────────────────────────────────────────────────
+
+@app.get("/api/sec/{ticker}/filing")
+def sec_filing(ticker: str):
+    """Return 10-K filing metadata for a ticker (CIK, accession number, section URLs)."""
+    result = get_latest_10k(ticker.upper())
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No 10-K filing found for {ticker.upper()}")
+    return result
+
+
+@app.get("/api/sec/{ticker}/excerpt")
+def sec_excerpt(ticker: str, section: str = "business"):
+    """Return a plain-text excerpt from the specified 10-K section."""
+    valid_sections = list(SECTION_LABELS.keys())
+    if section not in valid_sections:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid section '{section}'. Must be one of: {valid_sections}",
+        )
+    filing = get_latest_10k(ticker.upper())
+    if filing is None:
+        raise HTTPException(status_code=404, detail=f"No 10-K filing found for {ticker.upper()}")
+
+    text = get_section_text(ticker.upper(), section)
+    if text is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Could not extract section '{section}' from 10-K for {ticker.upper()}",
+        )
+    return {
+        "ticker": ticker.upper(),
+        "section": section,
+        "section_label": SECTION_LABELS.get(section, section),
+        "filing_date": filing["filing_date"],
+        "filing_url": filing["filing_url"],
+        "text": text,
+    }
 
 
 # ── Dev entrypoint ─────────────────────────────────────────────────────────────

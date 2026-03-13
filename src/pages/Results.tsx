@@ -1,19 +1,22 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TrendingUp, AlertTriangle, Target, Scale, CheckCircle2, AlertCircle, FileDown, Loader2, Info, FlaskConical, Trophy, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  TrendingUp, AlertTriangle, Target, Scale, CheckCircle2, AlertCircle,
+  FileDown, Loader2, Info, FlaskConical, Trophy, ChevronDown, ChevronUp,
+  BookOpen, Database, ShieldCheck,
+} from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAnalysis } from "@/context/AnalysisContext";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip } from "recharts";
 import { TrafficLight } from "@/components/TrafficLight";
 import { PortfolioExposure, ExposureData } from "@/components/PortfolioExposure";
-import DynamicIntentBadge from "@/components/DynamicIntentBadge";
-import EvaluatedScenariosMatrix from "@/components/EvaluatedScenariosMatrix";
 import CitationModal from "@/components/CitationModal";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 import type {
   AgentEvidenceScore,
   BearAnalysis,
   BullAnalysis,
+  EvaluatedScenario,
   EvidenceAssessment,
   SecFiling,
   StrategistAnalysis,
@@ -103,6 +106,503 @@ const AGENT_ROLES_TAB = [
   },
 ] as const;
 
+// ── Historical analog context lookup ─────────────────────────────────────────
+// Keywords matched case-insensitively as substrings of verified_analog_used.
+// All keywords in an entry must match (AND logic). First match wins.
+const ANALOG_CONTEXT_MAP: { keywords: string[]; context: string; category: string }[] = [
+  {
+    keywords: ["excel", "account"],
+    context:
+      "When spreadsheet software spread in the 1980s, bookkeeping demand fell ~50% in 10 years, but firms that pivoted to advisory services grew revenue 2–3×. Disruption compressed commodity hours while expanding higher-value advisory work.",
+    category: "AI Disruption",
+  },
+  {
+    keywords: ["aws", "consulting"],
+    context:
+      "AWS mainstream adoption (2010–2016) eliminated 30–40% of on-premise infrastructure consulting revenue, yet cloud migration consulting created a new $50B+ market. Advisory firms that pivoted grew total revenues despite commodity-tier compression.",
+    category: "AI Disruption",
+  },
+  {
+    keywords: ["atm", "teller"],
+    context:
+      "ATM deployment (1970–1995) actually increased total teller employment by lowering branch operating costs, enabling banks to open more locations. Automation can expand total market even while transforming human roles.",
+    category: "AI Disruption",
+  },
+  {
+    keywords: ["cad", "draft"],
+    context:
+      "AutoCAD's mass adoption (1985–1995) reduced engineering drafters by 40% in 17 years — the worst-case displacement scenario where cognitive complexity of remaining work was too low for role transformation at scale.",
+    category: "AI Disruption",
+  },
+  {
+    keywords: ["travel agent"],
+    context:
+      "Expedia and Booking.com wiped 41% of US travel agent locations within 5 years of internet mainstream adoption. Surviving agencies pivoted to luxury/complex itineraries at 3–5× the margin — disintermediation forces upmarket migration.",
+    category: "AI Disruption",
+  },
+  {
+    keywords: ["microsoft", "antitrust"],
+    context:
+      "The 1998 DOJ antitrust suit against Microsoft created 15–25% P/E multiple compression over 18 months but had minimal product impact after settlement. Regulatory fears in tech historically create multi-year sentiment headwinds rather than existential business change.",
+    category: "Regulatory",
+  },
+  {
+    keywords: ["at&t"],
+    context:
+      "The 1984 AT&T forced divestiture caused short-term disruption, but the 8 post-breakup entities collectively outperformed the S&P 500 by 25% over the following decade. Regulatory breakups can unlock sum-of-parts value exceeding the pre-split whole.",
+    category: "Regulatory",
+  },
+  {
+    keywords: ["dot-com", "valuat"],
+    context:
+      "The 2000 dot-com crash saw high-multiple tech (P/E >100×) fall an average 85%; the Nasdaq took 15 years to recover its 2000 peak. Companies with P/E >40× and <20% revenue growth face 60–75% downside in multiple-compression scenarios.",
+    category: "Valuation",
+  },
+  {
+    keywords: ["stagflation"],
+    context:
+      "The 1970s–1980 stagflation cycle delivered S&P 500 real returns of −15% over 14 years, with energy stocks +400% and high-PE growth stocks −60–80%. Rate normalisation from peak historically leads to 15–25% P/E re-expansion in tech over 12–18 months.",
+    category: "Rates",
+  },
+  {
+    keywords: ["1980", "rate shock"],
+    context:
+      "The 1980 Fed Funds peak at 20% compressed high-PE multiples by 40–60%. Historical precedent shows tech sector outperformance in the 12–18 months following peak rates, with P/E re-expansion of 15–25% as rates normalise.",
+    category: "Rates",
+  },
+  {
+    keywords: ["huawei"],
+    context:
+      "The 2019 Huawei Entity List ban created 12–24 month revenue headwinds of 10–20% for directly exposed chip suppliers, then resolved via alternative customers. Semiconductor names with >15% China revenue faced 25–40% multiple compression during active escalation.",
+    category: "Geopolitical",
+  },
+  {
+    keywords: ["swift"],
+    context:
+      "The 2022 Russia SWIFT sanctions caused concentrated 10–25% stock drawdowns in energy and companies with >5% Russia revenue, while contagion to unrelated sectors was limited and mean-reverting within 60 days. Safe-haven assets outperformed during active conflict.",
+    category: "Geopolitical",
+  },
+  {
+    keywords: ["cocom"],
+    context:
+      "Cold War COCOM export controls showed compliance costs of 2–5% of revenue and direct revenue loss of 5–15% in the first 2 years, partially offset by domestic demand. Historical precedent suggests 20–30% P/E compression during active restriction, recovering with policy clarity.",
+    category: "Geopolitical",
+  },
+  {
+    keywords: ["gfc"],
+    context:
+      "The 2008 GFC caused enterprise IT spending to fall 8% in 2009. Companies with >60% recurring revenue fell 5–15% while project-based consulting fell 20–35%. Enterprise tech returned to 2007 spending levels within 2 years of the trough.",
+    category: "Recession",
+  },
+  {
+    keywords: ["2001", "capex"],
+    context:
+      "The 2001 dot-com bust froze enterprise IT capex, with Cisco revenue falling 15% and Sun Microsystems 52%. Guidance cuts of 25–35% typically follow peak with a 6–9 month stock price lead. Revenue troughs last 6–10 quarters for enterprise tech.",
+    category: "Recession",
+  },
+  {
+    keywords: ["covid", "semiconductor"],
+    context:
+      "The 2020–2021 semiconductor shortage stretched lead times from 12 to 52+ weeks. Companies on just-in-time <30-day inventory took 15–25% revenue hits in peak shortage quarters vs those with 90+ day buffers who were largely insulated.",
+    category: "Supply Chain",
+  },
+  {
+    keywords: ["toyota", "jit"],
+    context:
+      "The 2011 Tohoku earthquake collapsed Toyota's JIT supply chain, cutting global output 40% in 2 months. Companies sourcing >30% of critical components from a single geography face 15–25% stock drawdowns and 2–6 months of revenue disruption per major shock.",
+    category: "Supply Chain",
+  },
+  {
+    keywords: ["opec"],
+    context:
+      "The 1973 OPEC embargo quadrupled oil prices in 3 months, pushing S&P 500 down 48% peak-to-trough. Airlines fell 40–60% and auto OEMs 30–50%, while oil majors gained 80–120%. Commodity shocks compress energy-intensive margins 30–60% within 2 quarters.",
+    category: "Commodity",
+  },
+  {
+    keywords: ["european", "natural gas"],
+    context:
+      "The 2022 European natural gas crisis pushed prices 17× above pre-crisis levels, costing BASF €8.3B in extra energy costs. Energy-intensive industrial stocks recovered 60–70% of peak losses within 18 months once commodity prices normalised.",
+    category: "Commodity",
+  },
+  {
+    keywords: ["ftx"],
+    context:
+      "The FTX collapse (Nov 2022) wiped $200B in crypto market cap in 8 days and triggered contagion bankruptcies (BlockFi, Genesis). Crypto exchange failures cause 25–40% Bitcoin drawdowns in 2–4 weeks, with crypto-adjacent equities amplifying moves 2–4×.",
+    category: "Crypto",
+  },
+  {
+    keywords: ["gox"],
+    context:
+      "Mt. Gox's 2014 hack triggered an 85% Bitcoin drawdown over 13 months. Bitcoin halving cycles (2012, 2016, 2020) show a consistent pattern: ~80% peak-to-trough corrections following parabolic run-ups. Crypto equities amplify Bitcoin moves 2–4× in both directions.",
+    category: "Crypto",
+  },
+  {
+    keywords: ["halving"],
+    context:
+      "Bitcoin halving cycles (2012, 2016, 2020) follow a consistent pattern: post-halving run-up to peak occurs 12–18 months after halving, followed by ~80% corrections. Miners and crypto-adjacent equities (MARA, RIOT) amplify BTC moves 2–4× in both directions.",
+    category: "Crypto",
+  },
+];
+
+// ── Category → Tailwind classes ───────────────────────────────────────────────
+const CATEGORY_STYLE: Record<string, { border: string; badge: string }> = {
+  "AI Disruption":  { border: "border-l-purple-500", badge: "bg-purple-100 text-purple-700" },
+  "Regulatory":     { border: "border-l-amber-500",  badge: "bg-amber-100 text-amber-700" },
+  "Geopolitical":   { border: "border-l-strategist", badge: "bg-strategist/10 text-strategist" },
+  "Valuation":      { border: "border-l-bear",       badge: "bg-bear/10 text-bear" },
+  "Rates":          { border: "border-l-orange-500", badge: "bg-orange-100 text-orange-700" },
+  "Recession":      { border: "border-l-bear",       badge: "bg-bear/10 text-bear" },
+  "Supply Chain":   { border: "border-l-amber-600",  badge: "bg-amber-100 text-amber-800" },
+  "Commodity":      { border: "border-l-yellow-600", badge: "bg-yellow-100 text-yellow-800" },
+  "Crypto":         { border: "border-l-orange-400", badge: "bg-orange-100 text-orange-700" },
+  "default":        { border: "border-l-accent",     badge: "bg-accent/10 text-accent" },
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function lookupAnalog(verifiedAnalogUsed: string): { context: string; category: string } | null {
+  const lower = verifiedAnalogUsed.toLowerCase();
+  for (const entry of ANALOG_CONTEXT_MAP) {
+    if (entry.keywords.every((kw) => lower.includes(kw))) {
+      return { context: entry.context, category: entry.category };
+    }
+  }
+  return null;
+}
+
+function categoryFromScenarioName(scenarioName: string): string {
+  if (/ai disruption/i.test(scenarioName)) return "AI Disruption";
+  if (/regulatory/i.test(scenarioName)) return "Regulatory";
+  if (/geopolit/i.test(scenarioName)) return "Geopolitical";
+  if (/valuation/i.test(scenarioName)) return "Valuation";
+  if (/stagflat|rates?\s+shock/i.test(scenarioName)) return "Rates";
+  if (/recession|demand slow/i.test(scenarioName)) return "Recession";
+  if (/supply chain/i.test(scenarioName)) return "Supply Chain";
+  if (/commodity/i.test(scenarioName)) return "Commodity";
+  if (/crypto/i.test(scenarioName)) return "Crypto";
+  return "default";
+}
+
+// ── Inline components — report framework ──────────────────────────────────────
+
+function ReportHeaderBar({
+  analysisId,
+  timestamp,
+  executionTime,
+  llmProvider,
+}: {
+  analysisId: string;
+  timestamp: string;
+  executionTime: number;
+  llmProvider: string;
+}) {
+  const ts = new Date(timestamp);
+  const dateStr = ts.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const timeStr = ts.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+
+  return (
+    <div className="bg-secondary/40 border-b border-border px-6 py-2">
+      <div className="container mx-auto max-w-6xl flex flex-wrap items-center gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground">
+        <span className="font-semibold text-foreground">InvestiGate AI</span>
+        <span className="text-border">|</span>
+        <span>Equity Research — AI Generated</span>
+        <span className="text-border">|</span>
+        <span>{dateStr} · {timeStr}</span>
+        <span className="text-border">|</span>
+        <span>ID: {analysisId.slice(0, 8).toUpperCase()}</span>
+        <span className="text-border">|</span>
+        <span>{executionTime.toFixed(1)}s</span>
+        <span className="text-border">|</span>
+        <span className="capitalize">{llmProvider}</span>
+      </div>
+    </div>
+  );
+}
+
+function EnhancedStockHeader({
+  ticker,
+  action,
+  confidenceOverall,
+  trafficLightColor,
+  companyName,
+  sector,
+  currentPrice,
+  regularMarketChange,
+  regularMarketChangePercent,
+  bullTarget,
+  bearTarget,
+}: {
+  ticker: string;
+  action: string;
+  confidenceOverall: number;
+  trafficLightColor: string;
+  companyName?: string;
+  sector?: string;
+  currentPrice?: number;
+  regularMarketChange?: number;
+  regularMarketChangePercent?: number;
+  bullTarget: number;
+  bearTarget: number;
+}) {
+  const actionUpper = action.toUpperCase();
+  const actionColor =
+    actionUpper === "BUY"  ? "bg-bull text-white" :
+    actionUpper === "SELL" ? "bg-bear text-white" :
+                             "bg-amber-500 text-white";
+
+  const pillColor =
+    trafficLightColor === "green" ? "bg-emerald-100 text-emerald-700" :
+    trafficLightColor === "yellow" ? "bg-amber-100 text-amber-700" :
+    "bg-rose-100 text-rose-700";
+
+  const changePositive = (regularMarketChange ?? 0) >= 0;
+
+  const lo = Math.min(bearTarget, bullTarget);
+  const hi = Math.max(bearTarget, bullTarget);
+  const hasBar = hi > lo && currentPrice != null;
+  const pricePct = hasBar
+    ? Math.max(0, Math.min(100, ((currentPrice - lo) / (hi - lo)) * 100))
+    : 0;
+
+  return (
+    <div className="mb-6">
+      {/* Top row: ticker + pills + price */}
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-3">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <h1 className="text-4xl font-bold text-foreground tracking-tight">{ticker}</h1>
+            <span className={`px-3 py-1 rounded-full text-sm font-bold uppercase tracking-wide ${actionColor}`}>
+              {actionUpper}
+            </span>
+            <span className={`px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${pillColor}`}>
+              {trafficLightColor}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            {companyName && <span className="font-medium text-foreground/80">{companyName}</span>}
+            {companyName && sector && <span>·</span>}
+            {sector && <span>{sector}</span>}
+          </div>
+        </div>
+        <div className="text-right">
+          {currentPrice != null && (
+            <p className="text-3xl font-bold text-foreground tabular-nums">
+              ${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+          )}
+          {regularMarketChange != null && regularMarketChangePercent != null && (
+            <p className={`text-sm font-semibold tabular-nums ${changePositive ? "text-bull" : "text-bear"}`}>
+              {changePositive ? "+" : ""}{regularMarketChange.toFixed(2)}
+              {" "}({changePositive ? "+" : ""}{(regularMarketChangePercent * 100).toFixed(2)}%)
+            </p>
+          )}
+          <div className="flex items-center gap-2 mt-1 justify-end">
+            <span className="text-[11px] text-muted-foreground">Confidence</span>
+            <span className="text-lg font-bold text-accent tabular-nums">{confidenceOverall}%</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Price range bar */}
+      {hasBar && (
+        <div className="mt-2">
+          <div className="relative h-2 w-full rounded-full overflow-visible"
+            style={{ background: "linear-gradient(to right, hsl(var(--bear)), hsl(220 13% 70%), hsl(var(--bull)))" }}>
+            <div
+              className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-foreground border-2 border-background shadow"
+              style={{ left: `${pricePct}%`, transform: "translate(-50%, -50%)" }}
+            />
+          </div>
+          <div className="flex justify-between mt-1.5 text-[11px] text-muted-foreground">
+            <span className="text-bear font-semibold">Bear ${bearTarget.toLocaleString()}</span>
+            {currentPrice != null && (
+              <span className="text-foreground font-medium">
+                Current ${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            )}
+            <span className="text-bull font-semibold">Bull ${bullTarget.toLocaleString()}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MarketMetricsStrip({ marketData }: { marketData: Record<string, unknown> | null }) {
+  if (!marketData) return null;
+
+  const md = marketData;
+  const trailingPE = md.trailingPE as number | undefined;
+  const forwardPE  = md.forwardPE  as number | undefined;
+  const marketCap  = md.marketCap  as number | undefined;
+  const beta       = md.beta       as number | undefined;
+  const low52      = md.fiftyTwoWeekLow  as number | undefined;
+  const high52     = md.fiftyTwoWeekHigh as number | undefined;
+  const divYield   = md.dividendYield   as number | undefined;
+
+  const formatCap = (v: number) => {
+    if (v >= 1e12) return `$${(v / 1e12).toFixed(1)}T`;
+    if (v >= 1e9)  return `$${(v / 1e9).toFixed(0)}B`;
+    if (v >= 1e6)  return `$${(v / 1e6).toFixed(0)}M`;
+    return `$${v.toLocaleString()}`;
+  };
+
+  const peStr = trailingPE != null
+    ? `${trailingPE.toFixed(1)}×`
+    : forwardPE != null
+    ? `${forwardPE.toFixed(1)}× fwd`
+    : "N/A";
+
+  const metrics = [
+    { label: "P/E (TTM)",    value: peStr },
+    { label: "Market Cap",   value: marketCap != null ? formatCap(marketCap) : "N/A" },
+    { label: "Beta",         value: beta != null ? beta.toFixed(2) : "N/A" },
+    { label: "52W Range",    value: low52 != null && high52 != null ? `$${low52.toLocaleString()} – $${high52.toLocaleString()}` : "N/A" },
+    { label: "Div Yield",    value: divYield != null ? `${(divYield * 100).toFixed(2)}%` : "N/A" },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-8">
+      {metrics.map((m) => (
+        <div key={m.label} className="bg-card rounded-lg border border-border p-3 text-center">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1 font-medium">{m.label}</p>
+          <p className="text-sm font-bold text-foreground tabular-nums">{m.value}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function KellySizingInline({ ks }: {
+  ks: {
+    kelly_fraction: number;
+    final_amount: number;
+    sizing_rationale: string;
+    scale_factor: number;
+  };
+}) {
+  return (
+    <div className="mt-4 p-4 rounded-xl border border-border bg-secondary/30">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-foreground uppercase tracking-wider">Kelly Position Sizing</span>
+        <span className="text-[11px] bg-accent/10 text-accent px-2 py-0.5 rounded-full font-semibold">
+          {(ks.kelly_fraction * 100).toFixed(1)}% Kelly fraction
+        </span>
+      </div>
+      <div className="grid grid-cols-3 gap-3 mb-3">
+        <div className="text-center">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Suggested Amount</p>
+          <p className="text-base font-bold text-foreground tabular-nums">${ks.final_amount.toLocaleString()}</p>
+        </div>
+        <div className="text-center">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Kelly Fraction</p>
+          <p className="text-base font-bold text-foreground tabular-nums">{(ks.kelly_fraction * 100).toFixed(1)}%</p>
+        </div>
+        <div className="text-center">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Scale Factor</p>
+          <p className="text-base font-bold text-foreground tabular-nums">{ks.scale_factor.toFixed(2)}×</p>
+        </div>
+      </div>
+      {ks.sizing_rationale && (
+        <p className="text-xs text-muted-foreground leading-relaxed">{ks.sizing_rationale}</p>
+      )}
+    </div>
+  );
+}
+
+// ── Scenario Analysis Section ─────────────────────────────────────────────────
+
+function ScenarioCard({ scenario, index }: { scenario: EvaluatedScenario; index: number }) {
+  const analogInfo = lookupAnalog(scenario.verified_analog_used);
+  const category = analogInfo?.category ?? categoryFromScenarioName(scenario.scenario_name);
+  const style = CATEGORY_STYLE[category] ?? CATEGORY_STYLE["default"];
+
+  return (
+    <div className={`bg-card rounded-xl border border-border border-l-4 ${style.border} p-5 shadow-sm`}>
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div>
+          <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mb-1">
+            Precedent {index + 1}
+          </p>
+          <p className="text-sm font-semibold text-foreground leading-snug">{scenario.scenario_name}</p>
+        </div>
+        <span className={`shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full ${style.badge}`}>
+          {category}
+        </span>
+      </div>
+      <div className="p-3 bg-secondary/40 rounded-lg mb-3">
+        <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-1">Verified Analog Used</p>
+        <p className="text-xs text-foreground font-medium">{scenario.verified_analog_used}</p>
+      </div>
+      {analogInfo?.context && (
+        <p className="text-xs text-muted-foreground leading-relaxed">{analogInfo.context}</p>
+      )}
+    </div>
+  );
+}
+
+function ScenarioAnalysisSection({
+  evaluatedScenarios,
+  ragSummary,
+}: {
+  evaluatedScenarios: EvaluatedScenario[];
+  ragSummary: { sec: number; news: number; cache_hit: boolean } | null;
+}) {
+  return (
+    <section className="mb-12">
+      {/* Section header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+        <div>
+          <h3 className="text-2xl font-bold text-foreground">§2 — Scenario Analysis &amp; Historical Precedents</h3>
+          <p className="text-sm text-muted-foreground mt-1">
+            Historical analogs the AI consulted to stress-test and quantify scenario outcomes
+          </p>
+        </div>
+        {evaluatedScenarios.length > 0 && (
+          <span className="text-xs font-semibold bg-accent/10 text-accent px-3 py-1.5 rounded-full">
+            {evaluatedScenarios.length} precedent{evaluatedScenarios.length === 1 ? "" : "s"} consulted
+          </span>
+        )}
+      </div>
+
+      {/* RAG summary bar */}
+      {ragSummary && (
+        <div className="flex flex-wrap items-center gap-4 mb-5 p-3 bg-secondary/40 rounded-lg border border-border text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5">
+            <Database size={13} className="text-accent" />
+            <span><span className="font-semibold text-foreground">{ragSummary.sec}</span> SEC 10-K sections indexed</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <BookOpen size={13} className="text-accent" />
+            <span><span className="font-semibold text-foreground">{ragSummary.news}</span> news articles indexed</span>
+          </div>
+          {ragSummary.cache_hit && (
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 size={13} className="text-bull" />
+              <span className="text-bull font-medium">Cached result</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Scenario cards or empty state */}
+      {evaluatedScenarios.length === 0 ? (
+        <div className="rounded-xl border border-border bg-secondary/30 p-6 text-center">
+          <p className="text-sm text-muted-foreground">
+            No historical scenario precedents were triggered for this analysis. The agents relied on current
+            SEC filings, market data, and news rather than macro-stress scenario analogs.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {evaluatedScenarios.map((s, i) => (
+            <ScenarioCard key={`${s.scenario_name}-${i}`} scenario={s} index={i} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ── Analyst "About" toggle card ───────────────────────────────────────────────
 function AnalystAbout({ role }: { role: "bull" | "bear" | "strategist" }) {
   const [open, setOpen] = useState(false);
@@ -127,7 +627,6 @@ function AnalystAbout({ role }: { role: "bull" | "bear" | "strategist" }) {
   );
 }
 
-// ── Warning banner ────────────────────────────────────────────────────────────
 function AgentRolesTab() {
   return (
     <Card className="shadow-sm mb-8">
@@ -330,6 +829,31 @@ function EvidenceScoreCard({
   );
 }
 
+function EvidenceInlineBadge({
+  scores,
+  weightedScore,
+}: {
+  scores: AgentEvidenceScore;
+  weightedScore: number;
+}) {
+  const totalPct = Math.round((scores.total / 40) * 100);
+  const textColor =
+    totalPct >= 75 ? "text-bull" : totalPct >= 55 ? "text-amber-600" : "text-bear";
+
+  return (
+    <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground bg-secondary/40 rounded-lg px-3 py-2">
+      <FlaskConical size={12} className="shrink-0 text-muted-foreground" />
+      <span>
+        Evidence Quality:{" "}
+        <span className={`font-semibold ${textColor}`}>{scores.total}/40</span>
+        {" · "}
+        Weighted:{" "}
+        <span className={`font-semibold ${textColor}`}>{weightedScore.toFixed(1)}</span>
+      </span>
+    </div>
+  );
+}
+
 function WeightedScoresPanel({ evidence }: { evidence: EvidenceAssessment }) {
   const agents = [
     { key: "bull", label: "🐂 Bull Analyst", weighted: evidence.bull_weighted, total: evidence.bull.total, color: "text-bull", bar: "bg-bull" },
@@ -418,16 +942,25 @@ function BullCard({
               <TrendingUp className="text-white" size={14} />
             </div>
             <span className="font-semibold text-foreground">Bull Analyst</span>
+            {speculativeClaimsCount > 0 && (
+              <span className="text-[11px] font-semibold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                {speculativeClaimsCount} speculative
+              </span>
+            )}
           </div>
           <span className="text-xs font-semibold bg-bull/10 text-bull px-2 py-1 rounded-full">
             {bull_analysis.confidence}/10
           </span>
         </div>
         <AnalystAbout role="bull" />
-        <div className="h-1 w-full rounded-full bg-secondary mb-5">
+        <div className="h-1 w-full rounded-full bg-secondary mb-3">
           <div className="h-full rounded-full bg-bull" style={{ width: `${bull_analysis.confidence * 10}%` }} />
         </div>
-        <p className="text-xs text-muted-foreground mb-1">Best Case Target</p>
+        {/* Evidence inline badge — always visible */}
+        {evidence && (
+          <EvidenceInlineBadge scores={evidence.bull} weightedScore={evidence.bull_weighted} />
+        )}
+        <p className="text-xs text-muted-foreground mt-5 mb-1">Best Case Target</p>
         <p className="text-2xl font-bold text-foreground mb-0.5 tabular-nums">
           ${bull_analysis.best_case_target.toLocaleString()}
         </p>
@@ -463,7 +996,7 @@ function BullCard({
               className="mt-4 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               <FlaskConical size={12} />
-              {showEvidence ? "Hide" : "Show"} evidence scores
+              {showEvidence ? "Hide" : "Show"} detailed evidence breakdown
               {showEvidence ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
             </button>
             {showEvidence && (
@@ -507,16 +1040,25 @@ function BearCard({
               <AlertTriangle className="text-white" size={14} />
             </div>
             <span className="font-semibold text-foreground">Bear Analyst</span>
+            {speculativeClaimsCount > 0 && (
+              <span className="text-[11px] font-semibold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                {speculativeClaimsCount} speculative
+              </span>
+            )}
           </div>
           <span className="text-xs font-semibold bg-bear/10 text-bear px-2 py-1 rounded-full">
             {bear_analysis.confidence}/10
           </span>
         </div>
         <AnalystAbout role="bear" />
-        <div className="h-1 w-full rounded-full bg-secondary mb-5">
+        <div className="h-1 w-full rounded-full bg-secondary mb-3">
           <div className="h-full rounded-full bg-bear" style={{ width: `${bear_analysis.confidence * 10}%` }} />
         </div>
-        <p className="text-xs text-muted-foreground mb-1">Worst Case Target</p>
+        {/* Evidence inline badge — always visible */}
+        {evidence && (
+          <EvidenceInlineBadge scores={evidence.bear} weightedScore={evidence.bear_weighted} />
+        )}
+        <p className="text-xs text-muted-foreground mt-5 mb-1">Worst Case Target</p>
         <p className="text-2xl font-bold text-foreground mb-0.5 tabular-nums">
           ${bear_analysis.worst_case_target.toLocaleString()}
         </p>
@@ -554,7 +1096,7 @@ function BearCard({
               className="mt-4 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               <FlaskConical size={12} />
-              {showEvidence ? "Hide" : "Show"} evidence scores
+              {showEvidence ? "Hide" : "Show"} detailed evidence breakdown
               {showEvidence ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
             </button>
             {showEvidence && (
@@ -591,7 +1133,14 @@ function StrategistCard({
           <span className="font-semibold text-foreground">Portfolio Strategist</span>
         </div>
         <AnalystAbout role="strategist" />
-        <p className="text-xs text-muted-foreground mb-1">Current Exposure</p>
+        <div className="h-1 w-full rounded-full bg-secondary mb-3">
+          <div className="h-full rounded-full bg-strategist" style={{ width: "100%" }} />
+        </div>
+        {/* Evidence inline badge — always visible */}
+        {evidence && (
+          <EvidenceInlineBadge scores={evidence.strategist} weightedScore={evidence.strategist_weighted} />
+        )}
+        <p className="text-xs text-muted-foreground mt-5 mb-1">Current Exposure</p>
         <p className="text-xl font-bold text-foreground mb-3">{strategist_analysis.current_exposure}</p>
         <div className="flex items-center gap-2 mb-5">
           <span className="text-xs text-muted-foreground">Concentration Risk:</span>
@@ -623,7 +1172,7 @@ function StrategistCard({
               className="mt-4 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               <FlaskConical size={12} />
-              {showEvidence ? "Hide" : "Show"} evidence scores
+              {showEvidence ? "Hide" : "Show"} detailed evidence breakdown
               {showEvidence ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
             </button>
             {showEvidence && (
@@ -639,6 +1188,8 @@ function StrategistCard({
     </Card>
   );
 }
+
+// ── Main Results component ────────────────────────────────────────────────────
 
 const Results = () => {
   const navigate = useNavigate();
@@ -682,21 +1233,27 @@ const Results = () => {
     bear_analysis,
     strategist_analysis,
     final_recommendation,
-    intent,
     market_data,
     traffic_light,
     portfolio_exposure,
     sec_filing,
+    kelly_sizing,
+    rag_summary,
+    execution_time,
+    timestamp,
+    llm_provider,
+    analysis_id,
   } = analysisResult;
 
   const evidence = final_recommendation.evidence_assessment ?? null;
-
   const proposedAmount = formData.amount ? parseFloat(formData.amount.replace(/,/g, "")) : 0;
 
-  const companyName = (market_data as Record<string, unknown>)?.longName as string | undefined;
-  const currentPrice = (market_data as Record<string, unknown>)?.currentPrice as number | undefined;
-  const routedScenarios =
-    intent?.scenarios ?? final_recommendation.evaluated_scenarios.map((item) => item.scenario_name);
+  const md = market_data as Record<string, unknown> | null;
+  const companyName = md?.longName as string | undefined;
+  const sector      = md?.sector  as string | undefined;
+  const currentPrice = md?.currentPrice as number | undefined;
+  const regularMarketChange        = md?.regularMarketChange        as number | undefined;
+  const regularMarketChangePercent = md?.regularMarketChangePercent as number | undefined;
 
   const breakdownData = Object.entries(final_recommendation.confidence_breakdown).map(([k, v]) => ({
     name: k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
@@ -705,7 +1262,15 @@ const Results = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
+      {/* Report header bar */}
+      <ReportHeaderBar
+        analysisId={analysis_id}
+        timestamp={timestamp}
+        executionTime={execution_time}
+        llmProvider={llm_provider}
+      />
+
+      {/* App nav header */}
       <header className="border-b border-border bg-card">
         <div className="container mx-auto flex items-center justify-between px-6 py-4">
           <h2 className="text-xl font-bold text-primary tracking-tight">InvestiGate</h2>
@@ -729,181 +1294,262 @@ const Results = () => {
       </header>
 
       <main className="container mx-auto max-w-6xl px-6 py-8 animate-fade-in">
-        {/* Stock header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-foreground">{ticker}</h1>
-          <p className="text-muted-foreground tabular-nums">
-            {companyName ?? ""}
-            {currentPrice != null ? ` · $${currentPrice.toLocaleString()}` : ""}
-          </p>
-        </div>
-        {/* ── Final Recommendation — shown FIRST ──────────────────────────── */}
-        <Tabs defaultValue="analysis" className="mb-2">
-          <TabsList className="mb-6">
-            <TabsTrigger value="analysis">Analysis</TabsTrigger>
-            <TabsTrigger value="roles">Agent Roles</TabsTrigger>
-          </TabsList>
-          <TabsContent value="roles">
-            <AgentRolesTab />
-          </TabsContent>
-          <TabsContent value="analysis">
-        <Card className="border-l-4 border-l-accent shadow-sm mb-8">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-2">
-                <Scale className="text-accent" size={20} />
-                <h3 className="text-lg font-semibold text-foreground">Final Recommendation</h3>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
-                  final_recommendation.traffic_light_color === "green"
-                    ? "bg-emerald-100 text-emerald-700"
-                    : final_recommendation.traffic_light_color === "yellow"
-                      ? "bg-amber-100 text-amber-700"
-                      : "bg-rose-100 text-rose-700"
-                }`}>
-                  {final_recommendation.traffic_light_color}
-                </span>
-                <span className="text-3xl font-bold text-accent tabular-nums">
-                  {final_recommendation.confidence_overall}%
-                </span>
-              </div>
-            </div>
-            <p className="text-sm text-muted-foreground leading-relaxed mb-6">{final_recommendation.reasoning}</p>
 
-            {/* Metric grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-              {[
-                { label: "Action", value: final_recommendation.action.toUpperCase(), accent: true },
-                { label: "Amount", value: `$${final_recommendation.recommended_amount.toLocaleString()}` },
-                { label: "Entry", value: final_recommendation.entry_strategy },
-                { label: "Risk Mgmt", value: final_recommendation.risk_management },
-              ].map((m) => (
-                <div key={m.label} className="rounded-lg border border-border p-3 text-center">
-                  <p className="text-xs text-muted-foreground mb-1">{m.label}</p>
-                  <p className={`text-sm font-bold ${m.accent ? "text-bull" : "text-foreground"} ${m.label === "Amount" ? "tabular-nums" : ""}`}>{m.value}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* Key Decision Factors */}
-            <p className="text-sm font-semibold text-foreground mb-3">Key Decision Factors</p>
-            <ol className="space-y-2 mb-6">
-              {final_recommendation.key_factors.map((f, i) => (
-                <li key={i} className="text-sm text-muted-foreground flex gap-2">
-                  <span className="text-accent font-semibold">{i + 1}.</span> {f}
-                </li>
-              ))}
-            </ol>
-
-            {/* Confidence Breakdown */}
-            <p className="text-sm font-semibold text-foreground mb-3">Confidence Breakdown</p>
-            <div className="space-y-3">
-              {breakdownData.map((d) => (
-                <div key={d.name}>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-muted-foreground">{d.name}</span>
-                    <span className="font-medium text-foreground tabular-nums">{d.value}%</span>
-                  </div>
-                  <div className="h-1.5 w-full rounded-full bg-secondary">
-                    <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${d.value}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Evidence-Weighted Decision Panel */}
-            {evidence && <WeightedScoresPanel evidence={evidence} />}
-          </CardContent>
-        </Card>
-
+        {/* Warning banner — shown before stock header for immediate visibility */}
         <WarningBanner
           trafficColor={traffic_light?.color}
           concentrationRisk={strategist_analysis.concentration_risk}
         />
 
+        {/* Enhanced stock header */}
+        <EnhancedStockHeader
+          ticker={ticker}
+          action={final_recommendation.action}
+          confidenceOverall={final_recommendation.confidence_overall}
+          trafficLightColor={final_recommendation.traffic_light_color}
+          companyName={companyName}
+          sector={sector}
+          currentPrice={currentPrice}
+          regularMarketChange={regularMarketChange}
+          regularMarketChangePercent={regularMarketChangePercent}
+          bullTarget={bull_analysis.best_case_target}
+          bearTarget={bear_analysis.worst_case_target}
+        />
+
+        {/* Market metrics strip */}
+        <MarketMetricsStrip marketData={market_data} />
+
+        {/* ── §1 Executive Summary ───────────────────────────────────────────── */}
+        <section className="mb-12">
+          <h3 className="text-2xl font-bold text-foreground mb-5 flex items-center gap-2">
+            <Scale className="text-accent" size={22} />
+            §1 — Executive Summary
+          </h3>
+          <Card className="border-l-4 border-l-accent shadow-sm">
+            <CardContent className="p-6">
+              {/* Metric grid — result first */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6 bg-secondary/30 p-4 rounded-xl border border-border/50">
+                {[
+                  { label: "Target Action",    value: final_recommendation.action.toUpperCase(), accent: true },
+                  { label: "Amount",           value: `$${final_recommendation.recommended_amount.toLocaleString()}` },
+                  { label: "Suggested Entry",  value: final_recommendation.entry_strategy },
+                  { label: "Risk Management",  value: final_recommendation.risk_management },
+                ].map((m) => (
+                  <div key={m.label} className="text-center">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1 font-medium">{m.label}</p>
+                    <p className={`text-sm font-bold ${m.accent ? "text-bull" : "text-foreground"} ${m.label === "Amount" ? "tabular-nums" : ""}`}>
+                      {m.value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <p className="text-base text-muted-foreground leading-relaxed mb-6">
+                {final_recommendation.reasoning}
+              </p>
+
+              {/* Key Decision Factors — numbered card grid */}
+              <p className="text-sm font-semibold text-foreground mb-3 uppercase tracking-wider">Key Decision Factors</p>
+              <div className="grid grid-cols-1 gap-2 mb-6">
+                {final_recommendation.key_factors.map((f, i) => (
+                  <div key={i} className="flex gap-3 rounded-lg border border-border p-3 bg-card">
+                    <div className="w-6 h-6 rounded-full bg-accent flex items-center justify-center shrink-0 mt-0.5">
+                      <span className="text-white text-[11px] font-bold">{i + 1}</span>
+                    </div>
+                    <p className="text-sm text-foreground leading-relaxed">{f}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Kelly Position Sizing */}
+              {kelly_sizing != null && <KellySizingInline ks={kelly_sizing} />}
+
+              {/* Evidence-Weighted Decision Panel — always visible */}
+              {evidence && <WeightedScoresPanel evidence={evidence} />}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Traffic Light */}
         {traffic_light && (
-          <div className="mb-6">
+          <div className="mb-12">
             <TrafficLight trafficLight={traffic_light} />
           </div>
         )}
 
-        <div className="mb-6">
-          <DynamicIntentBadge scenarios={routedScenarios} />
-        </div>
+        {/* ── §2 Scenario Analysis & Historical Precedents ───────────────────── */}
+        <ScenarioAnalysisSection
+          evaluatedScenarios={final_recommendation.evaluated_scenarios}
+          ragSummary={rag_summary}
+        />
 
-
-        {final_recommendation.evaluated_scenarios.length > 0 && (
-          <div className="mb-8">
-            <EvaluatedScenariosMatrix scenarios={final_recommendation.evaluated_scenarios} />
-          </div>
-        )}
-
-        {/* ── Agent Cards with role descriptions ───────────────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-8">
-          {/* Bull */}
+        {/* ── §3 Investment Thesis (Bull Case) ──────────────────────────────── */}
+        <section className="mb-12">
+          <h3 className="text-2xl font-bold text-foreground mb-6 flex items-center gap-2">
+            §3 — Investment Thesis
+            <span className="text-sm font-medium text-muted-foreground ml-2">(The Upside Case)</span>
+          </h3>
           <BullCard
             bull_analysis={bull_analysis}
             evidence={evidence}
             ticker={ticker}
             secFiling={sec_filing}
           />
+        </section>
 
-          {/* Bear */}
+        {/* ── §4 Principal Risks (Bear Case) ────────────────────────────────── */}
+        <section className="mb-12">
+          <h3 className="text-2xl font-bold text-foreground mb-6 flex items-center gap-2">
+            §4 — Principal Risks
+            <span className="text-sm font-medium text-muted-foreground ml-2">(The Downside Case)</span>
+          </h3>
           <BearCard
             bear_analysis={bear_analysis}
             evidence={evidence}
             ticker={ticker}
             secFiling={sec_filing}
           />
+        </section>
 
-          {/* Strategist */}
+        {/* ── §5 Portfolio Allocation Strategy ──────────────────────────────── */}
+        <section className="mb-16">
+          <h3 className="text-2xl font-bold text-foreground mb-6">
+            §5 — Portfolio Allocation Strategy
+          </h3>
           <StrategistCard strategist_analysis={strategist_analysis} evidence={evidence} />
-        </div>
 
-        {/* ── Confidence Chart ─────────────────────────────────────────────── */}
-        <Card className="shadow-sm mb-12">
-          <CardContent className="p-6">
-            <h3 className="text-lg font-semibold text-foreground mb-1">Confidence Analysis</h3>
-            <p className="text-sm text-muted-foreground mb-6">AI confidence scores across key dimensions</p>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={breakdownData} layout="vertical" margin={{ left: 20 }}>
-                  <XAxis
-                    type="number"
-                    domain={[0, 100]}
-                    tick={{ fontSize: 12, fill: "hsl(220 9% 46%)" }}
-                    tickFormatter={(v: number) => `${v}%`}
-                  />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: "hsl(220 13% 13%)" }} width={140} />
-                  <Tooltip
-                    formatter={(value: number) => [`${value}%`, "Score"]}
-                    contentStyle={{ borderRadius: 8, border: "1px solid hsl(220 13% 91%)", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}
-                  />
-                  <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={20}>
-                    {breakdownData.map((_, i) => (
-                      <Cell key={i} fill={`hsl(239 84% ${67 - i * 5}%)`} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+          {portfolio_exposure && (
+            <div className="mt-6">
+              <PortfolioExposure
+                exposure={portfolio_exposure as ExposureData}
+                ticker={ticker}
+                proposedAmount={proposedAmount}
+              />
             </div>
-          </CardContent>
-        </Card>
+          )}
+        </section>
 
-        {/* Portfolio Hidden Exposure (moved to bottom) */}
-        {portfolio_exposure && (
-          <div className="mb-6">
-            <PortfolioExposure
-              exposure={portfolio_exposure as ExposureData}
-              ticker={ticker}
-              proposedAmount={proposedAmount}
-            />
+        {/* ── Appendix ──────────────────────────────────────────────────────── */}
+        <section className="mb-12 pt-8 border-t border-border">
+          <h3 className="text-xl font-bold text-foreground mb-1">Appendix</h3>
+          <p className="text-sm text-muted-foreground mb-8">Supporting analysis, data sources, and methodology.</p>
+
+          {/* Confidence Analysis Chart */}
+          <Card className="shadow-sm mb-8">
+            <CardContent className="p-6">
+              <h4 className="text-lg font-semibold text-foreground mb-1">Confidence Analysis</h4>
+              <p className="text-sm text-muted-foreground mb-6">AI conviction scores across key dimensions</p>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={breakdownData} layout="vertical" margin={{ left: 20 }}>
+                    <XAxis
+                      type="number"
+                      domain={[0, 100]}
+                      tick={{ fontSize: 12, fill: "hsl(220 9% 46%)" }}
+                      tickFormatter={(v: number) => `${v}%`}
+                    />
+                    <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: "hsl(220 13% 13%)" }} width={140} />
+                    <Tooltip
+                      formatter={(value: number) => [`${value}%`, "Score"]}
+                      contentStyle={{ borderRadius: 8, border: "1px solid hsl(220 13% 91%)", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}
+                    />
+                    <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={20}>
+                      {breakdownData.map((_, i) => (
+                        <Cell key={i} fill={`hsl(239 84% ${67 - i * 5}%)`} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Agent Roles */}
+          <AgentRolesTab />
+
+          {/* Data Sources */}
+          {rag_summary && (
+            <Card className="shadow-sm mb-8">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <Database size={16} className="text-accent" />
+                  <h4 className="text-lg font-semibold text-foreground">Data Sources</h4>
+                </div>
+                <p className="text-sm text-muted-foreground mb-5">
+                  All data sources indexed and retrieved for this analysis run.
+                </p>
+                <div className="grid grid-cols-3 gap-4 mb-4">
+                  <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
+                    <p className="text-3xl font-bold text-foreground tabular-nums">{rag_summary.sec}</p>
+                    <p className="text-xs text-muted-foreground mt-1.5 font-medium">SEC 10-K Sections</p>
+                  </div>
+                  <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
+                    <p className="text-3xl font-bold text-foreground tabular-nums">{rag_summary.news}</p>
+                    <p className="text-xs text-muted-foreground mt-1.5 font-medium">News Articles</p>
+                  </div>
+                  <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
+                    <p className="text-3xl font-bold text-foreground tabular-nums">{final_recommendation.evaluated_scenarios.length}</p>
+                    <p className="text-xs text-muted-foreground mt-1.5 font-medium">Historical Analogs</p>
+                  </div>
+                </div>
+                {rag_summary.cache_hit && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <CheckCircle2 size={12} className="text-bull" />
+                    Results served from cache — identical query run recently
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Methodology */}
+          <Card className="shadow-sm mb-8">
+            <CardContent className="p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <BookOpen size={16} className="text-accent" />
+                <h4 className="text-lg font-semibold text-foreground">Methodology</h4>
+              </div>
+              <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+                InvestiGate uses a four-agent adversarial debate framework to generate balanced investment analysis:
+              </p>
+              <div className="space-y-3">
+                {[
+                  { step: "1", title: "Intent Routing", desc: "User query is parsed to identify ticker, action intent, and applicable macro scenarios (AI disruption, geopolitical risk, etc.)." },
+                  { step: "2", title: "RAG Grounding", desc: "SEC 10-K filings and recent news are retrieved and embedded. Historical analog documents are retrieved for detected scenario tags." },
+                  { step: "3", title: "Parallel Debate", desc: "Bull, Bear, and Strategist agents run concurrently, each constrained to build the strongest case for their mandate using the retrieved evidence." },
+                  { step: "4", title: "Evidence Scoring", desc: "Each agent's output is scored on data citations, calculation rigor, historical precedent, and counterarguments (0–40 scale)." },
+                  { step: "5", title: "Judge Decision", desc: "The CIO / Judge weights conviction against evidence quality, selects the winning argument, and outputs the final recommendation with confidence breakdown." },
+                ].map((s) => (
+                  <div key={s.step} className="flex gap-3">
+                    <div className="w-6 h-6 rounded-full bg-accent/10 flex items-center justify-center shrink-0 mt-0.5">
+                      <span className="text-accent text-[11px] font-bold">{s.step}</span>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">{s.title}</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">{s.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Disclaimer */}
+          <div className="p-4 bg-secondary/30 rounded-xl border border-border">
+            <div className="flex items-center gap-1.5 mb-2">
+              <ShieldCheck size={14} className="text-muted-foreground" />
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Disclaimer</p>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              This report is generated by an AI system and is provided for informational and educational
+              purposes only. It does not constitute financial advice, an offer to buy or sell securities, or
+              a solicitation of any investment decision. Past performance of historical analogs does not
+              guarantee future results. AI-generated analysis may contain errors, outdated information, or
+              speculative claims — always verify independently before making investment decisions. Consult a
+              qualified financial advisor before acting on any analysis in this report.
+            </p>
           </div>
-        )}
-
-          </TabsContent>
-        </Tabs>
+        </section>
       </main>
     </div>
   );

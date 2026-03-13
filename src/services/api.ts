@@ -256,6 +256,71 @@ export async function analyze(req: AnalyzeRequest): Promise<AnalysisResponse> {
   });
 }
 
+export type StreamEvent =
+  | { status: string }
+  | { agent: string; status: "complete" }
+  | { type: "result"; payload: AnalysisResponse }
+  | { error: string };
+
+/** 
+ * Run an analysis via Server-Sent Events to get real-time progress.
+ * Calls `onEvent` as updates stream in. The Promise resolves with the 
+ * final AnalysisResponse.
+ */
+export async function streamAnalyze(
+  req: AnalyzeRequest,
+  onEvent: (event: StreamEvent) => void
+): Promise<AnalysisResponse> {
+  const response = await fetch(`${API_BASE}/analyze/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to start analysis: ${response.statusText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Stream not supported");
+
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Process full SSE lines (ending in \n\n)
+    const parts = buffer.split("\n\n");
+    // Keep the last partial chunk in the buffer
+    buffer = parts.pop() || "";
+
+    for (const part of parts) {
+      if (part.startsWith("data: ")) {
+        const jsonStr = part.slice(6);
+        try {
+          const evt = JSON.parse(jsonStr) as StreamEvent;
+          onEvent(evt);
+
+          if ("type" in evt && evt.type === "result") {
+            return evt.payload;
+          }
+          if ("error" in evt) {
+            throw new Error(evt.error);
+          }
+        } catch (err) {
+          console.warn("Failed to parse SSE chunk:", part, err);
+        }
+      }
+    }
+  }
+
+  throw new Error("Stream ended before receiving final result.");
+}
+
 /** Fetch a single analysis by UUID. */
 export async function getAnalysis(id: string): Promise<AnalysisResponse> {
   return apiCall<AnalysisResponse>(`/analysis/${id}`);

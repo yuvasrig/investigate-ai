@@ -31,6 +31,13 @@ def _safe(v: Any, fallback: str = "N/A") -> str:
     return s if s else fallback
 
 
+def _claim_text(item: Any) -> str:
+    """Extract text from a VerifiedClaim dict or plain string."""
+    if isinstance(item, dict):
+        return _safe(item.get("claim") or item.get("text") or next(iter(item.values()), ""))
+    return _safe(item)
+
+
 def _money(v: Any) -> str:
     try:
         return f"${float(v):,.0f}"
@@ -80,46 +87,62 @@ class _PDF(FPDF):
         self.set_text_color(*_DARK_RGB)
 
     def kv(self, label: str, value: str, label_w: float = 48):
-        """Label + value on the same row; value wraps if needed."""
-        printable_value = _printable(value)
-        available = self.w - self.l_margin - self.r_margin - label_w
-        if available < 10:
-            label_w = 30
-            available = self.w - self.l_margin - self.r_margin - label_w
+        """Label + value row. Always anchors to left margin to avoid cursor drift."""
+        x0 = self.l_margin
+        y0 = self.get_y()
+        available = self.w - self.r_margin - (x0 + label_w)
 
+        # Label
+        self.set_xy(x0, y0)
         self.set_font("Helvetica", "B", 8)
         self.set_text_color(*_MUTED_RGB)
-        # Save Y before rendering label
-        y_before = self.get_y()
         self.cell(label_w, 5, _printable(label.upper()), ln=False)
 
+        # Value (multi-line safe)
+        self.set_xy(x0 + label_w, y0)
         self.set_font("Helvetica", "", 9)
         self.set_text_color(*_DARK_RGB)
-        self.multi_cell(available, 5, printable_value)
+        self.multi_cell(available, 5, _printable(value))
 
-        # Ensure we're below both columns
-        if self.get_y() < y_before + 5:
-            self.ln(5 - (self.get_y() - y_before))
+        # Guarantee cursor is below this row and x is reset
+        new_y = max(self.get_y(), y0 + 5)
+        self.set_xy(x0, new_y)
+        self.ln(1)
 
     def bullet_item(self, text: str, color: tuple[int, int, int] = _MUTED_RGB):
         indent = 5
-        available = self.w - self.l_margin - self.r_margin - indent
+        x0 = self.l_margin
+        y0 = self.get_y()
+        available = self.w - self.r_margin - (x0 + indent)
+
+        self.set_xy(x0, y0)
         self.set_font("Helvetica", "", 8)
         self.set_text_color(*color)
         self.cell(indent, 5, "-", ln=False)
+
+        self.set_xy(x0 + indent, y0)
+        self.set_font("Helvetica", "", 8)
         self.set_text_color(*_DARK_RGB)
         self.multi_cell(available, 5, _printable(text))
+        self.set_x(x0)
 
     def numbered_item(self, n: int, text: str,
                       color: tuple[int, int, int] = _ACCENT_RGB):
         indent = 7
-        available = self.w - self.l_margin - self.r_margin - indent
+        x0 = self.l_margin
+        y0 = self.get_y()
+        available = self.w - self.r_margin - (x0 + indent)
+
+        self.set_xy(x0, y0)
         self.set_font("Helvetica", "B", 8)
         self.set_text_color(*color)
         self.cell(indent, 5, f"{n}.", ln=False)
+
+        self.set_xy(x0 + indent, y0)
         self.set_font("Helvetica", "", 9)
         self.set_text_color(*_DARK_RGB)
         self.multi_cell(available, 5, _printable(text))
+        self.set_x(x0)
 
     def body(self, text: str):
         self.set_font("Helvetica", "", 9)
@@ -240,13 +263,13 @@ def generate_pdf(analysis: dict) -> bytes:
     pdf.set_text_color(*_DARK_RGB)
     pdf.cell(0, 5, "Competitive Advantages", ln=True)
     for adv in (bull.get("competitive_advantages") or []):
-        pdf.bullet_item(adv, _BULL_RGB)
+        pdf.bullet_item(_claim_text(adv), _BULL_RGB)
 
     pdf.ln(1)
     pdf.set_font("Helvetica", "B", 8)
     pdf.cell(0, 5, "Growth Catalysts", ln=True)
     for cat in (bull.get("growth_catalysts") or []):
-        pdf.bullet_item(cat)
+        pdf.bullet_item(_claim_text(cat))
 
     vj = bull.get("valuation_justification")
     if vj:
@@ -265,7 +288,7 @@ def generate_pdf(analysis: dict) -> bytes:
     pdf.set_text_color(*_DARK_RGB)
     pdf.cell(0, 5, "Competition & Risks", ln=True)
     for threat in (bear.get("competition_threats") or []):
-        pdf.bullet_item(threat, _BEAR_RGB)
+        pdf.bullet_item(_claim_text(threat), _BEAR_RGB)
 
     vc = bear.get("valuation_concerns")
     if vc:

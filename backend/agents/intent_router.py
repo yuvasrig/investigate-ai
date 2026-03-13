@@ -23,7 +23,12 @@ _SCENARIO_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bregulat|\bantitrust\b|\blawsuit\b|\bban\b", re.I), "Regulatory Crackdown Analog"),
     (re.compile(r"\bsupply chain\b|\bshipping\b|\bshortage\b", re.I), "Supply Chain Shock Analog"),
     (re.compile(r"\benergy\b|\boil\b|\bgas\b|\bcommodity\b", re.I), "Commodity Shock Analog"),
-    (re.compile(r"\bcrypto\b|\bbitcoin\b|\beth\b", re.I), "Crypto Volatility Analog"),
+    (re.compile(
+        r"\bcrypto\b|\bbitcoin\b|\bbtc\b|\beth\b|\bethereum\b|\bsolana\b|\bsol\b"
+        r"|\bblockchain\b|\bdefi\b|\bnft\b|\bftx\b|\bcoinbase\b|\bcoin\b"
+        r"|\bhalving\b|\bstablecoin\b|\bweb3\b|\btoken\b|\bwallet\b",
+        re.I,
+    ), "Crypto Volatility Analog"),
 ]
 
 

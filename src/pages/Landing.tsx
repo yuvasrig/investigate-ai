@@ -63,6 +63,13 @@ const QUERY_STOPWORDS = new Set([
 
 function extractTickerFromText(input: string): string {
   const tokens = input.match(/\b[A-Za-z]{1,5}\b/g) ?? [];
+  // Prefer ALL_CAPS tokens (2+ chars) — these look like ticker symbols (e.g. ACN, NVDA)
+  for (const token of tokens) {
+    if (token.length >= 2 && token === token.toUpperCase() && !QUERY_STOPWORDS.has(token)) {
+      return token;
+    }
+  }
+  // Fall back to first non-stopword token
   for (const token of tokens) {
     const normalized = token.toUpperCase();
     if (!QUERY_STOPWORDS.has(normalized)) {
@@ -414,7 +421,7 @@ export default function Landing() {
                 type="text"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Ask anything: What will happen to ACN if Claude succeeds in replacing consulting companies?"
+                placeholder="Ask anything about a stock or position…"
                 className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none"
               />
               <button

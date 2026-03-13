@@ -117,12 +117,24 @@ class ConfidenceBreakdown(BaseModel):
 # ── Evidence-Based Scoring ─────────────────────────────────────────────────────
 
 class AgentEvidenceScore(BaseModel):
-    """Evidence quality scores for a single analyst (0-10 each, max 40 total)."""
+    """Evidence quality scores for a single analyst (0-10 each, max 40 base, -18 gated grounding penalty)."""
     data_citations: int = Field(ge=0, le=10, description="Data Citations quality (0-10): specificity and sourcing of data points")
     calculation_rigor: int = Field(ge=0, le=10, description="Calculation Rigor (0-10): shows valuation methodology and work")
     historical_precedent: int = Field(ge=0, le=10, description="Historical Precedent (0-10): specific comparables with dates and numbers")
     counterargument: int = Field(ge=0, le=10, description="Counterargument Strength (0-10): acknowledges and addresses opposing views")
-    total: int = Field(ge=0, le=40, description="Sum of all four dimension scores (max 40)")
+    gated_grounding_penalty: int = Field(
+        ge=-18, le=0, default=0,
+        description=(
+            "Gated Grounding penalty (−18 to 0): "
+            "0 = all major claims cite SEC 10-K or a verified historical analog. "
+            "−9 = some claims grounded, others speculative. "
+            "−18 = core thesis relies entirely on unverified speculation with no 10-K or analog grounding."
+        ),
+    )
+    total: int = Field(
+        ge=-18, le=40,
+        description="Sum of four dimension scores plus gated_grounding_penalty (range: −18 to 40)",
+    )
 
 
 class EvidenceAssessment(BaseModel):

@@ -9,6 +9,13 @@ _STOPWORDS = {
 }
 
 _SCENARIO_RULES: list[tuple[re.Pattern[str], str]] = [
+    # AI disruption checked first — most specific pattern, prevents false matches
+    (re.compile(
+        r"\bai\b|\bartificial\s+intelligence\b|\bllm\b|\bclaude\b|\bgpt\b"
+        r"|\bchatgpt\b|\bautomat|\bdisrupt|\breplace\b|\bdisplace\b"
+        r"|\bconsult|\bwhite.?collar\b|\bknowledge\s+work",
+        re.I,
+    ), "AI Disruption Analog"),
     (re.compile(r"\btaiwan\b|\bchina\b|\bgeopolitic|\bpacific\b", re.I), "Geopolitical Escalation: Pacific Rim"),
     (re.compile(r"\bstagflation\b|\binflation\b|\brates?\b|\bfed\b", re.I), "Rates Shock / Stagflation Analog"),
     (re.compile(r"\brecession\b|\bslowdown\b|\bsoft landing\b|\bhard landing\b", re.I), "Demand Slowdown / Recession Analog"),

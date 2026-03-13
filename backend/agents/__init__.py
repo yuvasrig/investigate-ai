@@ -228,9 +228,9 @@ Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper 
   ],
   "key_factors": ["string", ...],
   "evidence_assessment": {
-    "bull": {"data_citations": 0, "calculation_rigor": 0, "historical_precedent": 0, "counterargument": 0, "total": 0},
-    "bear": {"data_citations": 0, "calculation_rigor": 0, "historical_precedent": 0, "counterargument": 0, "total": 0},
-    "strategist": {"data_citations": 0, "calculation_rigor": 0, "historical_precedent": 0, "counterargument": 0, "total": 0},
+    "bull": {"data_citations": 0, "calculation_rigor": 0, "historical_precedent": 0, "counterargument": 0, "gated_grounding_penalty": 0, "total": 0},
+    "bear": {"data_citations": 0, "calculation_rigor": 0, "historical_precedent": 0, "counterargument": 0, "gated_grounding_penalty": 0, "total": 0},
+    "strategist": {"data_citations": 0, "calculation_rigor": 0, "historical_precedent": 0, "counterargument": 0, "gated_grounding_penalty": 0, "total": 0},
     "bull_weighted": 0.0,
     "bear_weighted": 0.0,
     "strategist_weighted": 0.0,
@@ -767,13 +767,18 @@ CRITICAL: You must evaluate argument QUALITY, not just conviction levels.
 For each analyst (Bull, Bear, Strategist), score their argument quality on these dimensions:
 1. DATA CITATIONS (0-10 points): Multiple specific data points with sources (10), some data (7), vague claims (4), no data (0).
 2. CALCULATION RIGOR (0-10 points): Shows work/methodology (10), mentions methodology broadly (7), states conclusion only (4), no rigor (0).
-3. HISTORICAL PRECEDENT (0-10 points): Specific comparables (10), generic history (7), vague (4), no context (0).
+3. HISTORICAL PRECEDENT (0-10 points): Specific comparables with dates+numbers from RAG analogs (10), generic history (7), vague (4), no context (0).
 4. COUNTERARGUMENT STRENGTH (0-10 points): Addresses opposing view directly (10), mentions opposition (7), ignores (4), one-sided (0).
-TOTAL EVIDENCE SCORE = sum of 4 dimensions (max 40)
+BASE EVIDENCE SCORE = sum of 4 dimensions (max 40)
 
-HALLUCINATION PENALTY:
-Check the `is_speculative` flag on numerical claims used by the Bull and Bear.
-DEDUCT 20 POINTS from the Analyst's Total Evidence Score for utilizing unverified numerical claims.
+GATED GROUNDING PENALTY (gated_grounding_penalty, range -18 to 0):
+Inspect whether the analyst's CORE CLAIMS are grounded in either:
+  (a) SEC 10-K data (sec_section set on the claim), OR
+  (b) a verified historical analog from the RAG HISTORICAL ANALOGS block above.
+Score:  0 = all major claims cite SEC 10-K or a named historical analog (e.g. "Excel→Accounting 1988")
+        -9 = some claims grounded, others speculative (mixed grounding)
+       -18 = core thesis relies entirely on speculation — no 10-K or analog grounding found
+TOTAL EVIDENCE SCORE = BASE SCORE + gated_grounding_penalty (range: -18 to 40)
 
 DECISION WEIGHTING FORMULA (use for evidence_assessment logic):
 Weighted Score = (Analyst_Conviction × Analyst_Total_Evidence_Score) / 40

@@ -102,8 +102,11 @@ def rag_node(state: InvestmentState) -> dict[str, Any]:
     ticker = state["ticker"]
     market_data = state["market_data"] or {}
 
+    intent = state.get("intent")
+    scenarios = intent.scenarios if intent else []
+
     rag_summary = ingest_ticker(ticker, market_data)
-    rag_context = retrieve_all_agents(ticker)
+    rag_context = retrieve_all_agents(ticker, scenarios=scenarios)
 
     # SEC 10-K grounding — fetch in parallel with RAG (non-blocking; None if unavailable)
     sec_filing = get_latest_10k(ticker)

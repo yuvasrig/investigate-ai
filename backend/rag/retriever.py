@@ -17,6 +17,7 @@ import os
 
 from rag.ingestion import SECIngester, NewsIngester
 from rag import store
+from rag.historical_analogs import retrieve_analogs, ensure_analogs_seeded
 
 RAG_ENABLED: bool = os.getenv("RAG_ENABLED", "true").lower() == "true"
 
@@ -60,11 +61,15 @@ def ingest_ticker(ticker: str, market_data: dict) -> dict:
     Sources:
       - SEC 10-K and 10-Q filings (via EDGAR REST API)
       - Full news article text (from URLs in market_data['recent_news'])
+      - Historical analogs collection (seeded once per process)
 
     Returns a summary dict: {"sec": N, "news": M, "cache_hit": bool}
     """
     if not RAG_ENABLED:
         return {"sec": 0, "news": 0, "cache_hit": False, "disabled": True}
+
+    # Always ensure analogs are seeded (idempotent)
+    ensure_analogs_seeded()
 
     if store.is_fresh(ticker):
         return {"sec": 0, "news": 0, "cache_hit": True}
@@ -141,11 +146,15 @@ def retrieve_for_agent(ticker: str, role: str, n_results: int = 6) -> str:
     return "\n".join(lines)
 
 
-def retrieve_all_agents(ticker: str) -> dict[str, str]:
+def retrieve_all_agents(ticker: str, scenarios: list[str] | None = None) -> dict[str, str]:
     """
     Retrieve RAG context for all four agent roles in parallel.
     Returns {"bull": str, "bear": str, "strategist": str, "judge": str}.
     Empty strings mean no relevant documents were found for that role.
+
+    If *scenarios* are provided (from the Intent Router), the matching
+    historical analog block is appended to every agent's context so all
+    agents can cite verified precedents when scoring the scenario.
     """
     if not RAG_ENABLED:
         return {role: "" for role in AGENT_QUERIES}
@@ -153,7 +162,17 @@ def retrieve_all_agents(ticker: str) -> dict[str, str]:
     roles = list(AGENT_QUERIES.keys())
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
         futures = {role: ex.submit(retrieve_for_agent, ticker, role) for role in roles}
-        return {role: fut.result() for role, fut in futures.items()}
+        results = {role: fut.result() for role, fut in futures.items()}
+
+    # Append scenario analogs to all agent contexts if scenarios were detected
+    analog_block = retrieve_analogs(scenarios or [])
+    if analog_block:
+        results = {
+            role: (ctx + "\n\n" + analog_block if ctx else analog_block)
+            for role, ctx in results.items()
+        }
+
+    return results
 
 
 def rag_status(ticker: str) -> dict:

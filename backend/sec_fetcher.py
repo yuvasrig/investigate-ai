@@ -31,6 +31,11 @@ _SECTION_PATTERNS: dict[str, tuple[str, str]] = {
     "risk_factors": (r"Item\s+1A[\.\s]*Risk\s+Factors",            r"Item\s+1B"),
     "mda":          (r"Item\s+7[\.\s]*Management.{0,30}Discussion", r"Item\s+7A"),
     "financials":   (r"Item\s+8[\.\s]*Financial\s+Statements",     r"Item\s+9"),
+    # Geographic revenue breakdown — appears in financial statement notes or Item 1
+    "geography":    (
+        r"(?:Geographic|Geographical)\s+(?:Information|Segment|Revenue|Area|Region|Breakdown|Data)",
+        r"(?:Item\s+9|\Z)",
+    ),
 }
 
 # Human-readable labels shown in the frontend
@@ -39,7 +44,16 @@ SECTION_LABELS: dict[str, str] = {
     "risk_factors": "Item 1A — Risk Factors",
     "mda":          "Item 7 — MD&A",
     "financials":   "Item 8 — Financial Statements",
+    "geography":    "Geographic Revenue Segments",
 }
+
+# Regex patterns that match common geographic revenue table formats
+_GEO_ROW_PATTERN = re.compile(
+    r"(?:United\s+States|Americas|EMEA|Europe|Asia.Pacific|APAC|International|"
+    r"Domestic|North\s+America|Latin\s+America|Middle\s+East|Africa|China|Japan)"
+    r"[^$\d]{0,40}\$?\s*[\d,]+(?:\.\d+)?(?:\s*(?:billion|million|B|M))?",
+    re.IGNORECASE,
+)
 
 # ── In-process caches ─────────────────────────────────────────────────────────
 
@@ -196,12 +210,51 @@ def get_section_text(ticker: str, section: str, max_chars: int = 4000) -> Option
         return None
 
 
+# ── Geographic revenue summary ────────────────────────────────────────────────
+
+def get_geographic_summary(ticker: str, max_chars: int = 1200) -> Optional[str]:
+    """
+    Extract and return a geographic revenue breakdown from the latest 10-K.
+
+    Searches first for a dedicated geographic section, then falls back to
+    scanning the financials section for geo-revenue rows.
+
+    Returns a compact plain-text summary, or None if not found.
+    """
+    # Try dedicated geographic section first
+    geo_text = get_section_text(ticker, "geography", max_chars=max_chars)
+    if geo_text and len(geo_text) > 100:
+        return geo_text[:max_chars]
+
+    # Fall back: scan financials section for geo-pattern matches
+    fin_text = get_section_text(ticker, "financials", max_chars=8000)
+    if not fin_text:
+        return None
+
+    matches = _GEO_ROW_PATTERN.findall(fin_text)
+    if not matches:
+        return None
+
+    # Return deduplicated matches as bullet lines
+    seen: set[str] = set()
+    lines = ["Geographic Revenue Breakdown (extracted from financial statements):"]
+    for m in matches:
+        clean = re.sub(r"\s+", " ", m.strip())
+        if clean not in seen:
+            seen.add(clean)
+            lines.append(f"  • {clean}")
+        if len(lines) > 12:   # cap at ~10 geo rows
+            break
+
+    return "\n".join(lines) if len(lines) > 1 else None
+
+
 # ── Agent grounding block ─────────────────────────────────────────────────────
 
 def get_sec_grounding_context(ticker: str, max_chars_per_section: int = 1800) -> str:
     """
     Return a compact SEC grounding block for injection into agent prompts.
-    Includes Risk Factors and MD&A excerpts from the latest 10-K.
+    Includes Risk Factors, MD&A, and geographic revenue data from the latest 10-K.
     Returns an empty string if EDGAR is unavailable (never raises).
     """
     filing = get_latest_10k(ticker)
@@ -222,5 +275,10 @@ def get_sec_grounding_context(ticker: str, max_chars_per_section: int = 1800) ->
         text = get_section_text(ticker, section_key, max_chars=max_chars_per_section)
         if text:
             lines += [f"── {label} ──", text[:max_chars_per_section], ""]
+
+    # Geographic revenue data (compact — max 600 chars to stay within token budget)
+    geo = get_geographic_summary(ticker, max_chars=600)
+    if geo:
+        lines += ["── GEOGRAPHIC REVENUE DATA ──", geo, ""]
 
     return "\n".join(lines)

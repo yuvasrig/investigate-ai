@@ -28,6 +28,7 @@ from services.storage_service import save_analysis, get_analysis, list_analyses
 from services.cache_service import get_cached, set_cached
 from services.export_service import generate_pdf
 from portfolio_analyzer import calculate_hidden_exposure, analyze_complete_portfolio
+from sec_fetcher import get_latest_10k, get_section_text, SECTION_LABELS
 from demo_data import DEMO_PORTFOLIO
 import voice_parser as vp
 from kelly import compute_kelly_sizing
@@ -269,6 +270,7 @@ def analyze(request: Request, body: AnalysisRequest, db: Session = Depends(get_d
             traffic_light=traffic_light,
             portfolio_exposure=portfolio_exposure,
             kelly_sizing=kelly_sizing,
+            sec_filing=result.get("sec_filing"),
             execution_time=elapsed,
             timestamp=timestamp,
         )
@@ -456,6 +458,44 @@ def portfolio_exposure_endpoint(body: dict):
         raise HTTPException(status_code=400, detail="ticker and holdings are required")
     exposure = calculate_hidden_exposure(holdings, ticker, amount)
     return exposure
+
+
+# ── SEC EDGAR endpoints ───────────────────────────────────────────────────────
+
+@app.get("/api/sec/{ticker}/filing")
+def sec_filing_metadata(ticker: str):
+    """Return 10-K filing metadata (URL, date, section URLs) for a ticker."""
+    filing = get_latest_10k(ticker.upper())
+    if not filing:
+        raise HTTPException(status_code=404, detail=f"No 10-K filing found for {ticker.upper()}")
+    return filing
+
+
+@app.get("/api/sec/{ticker}/excerpt")
+def sec_section_excerpt(ticker: str, section: str = "risk_factors"):
+    """
+    Return plain-text excerpt from a specific 10-K section.
+
+    ?section= one of: business | risk_factors | mda | financials
+    """
+    valid = list(SECTION_LABELS.keys())
+    if section not in valid:
+        raise HTTPException(status_code=400, detail=f"section must be one of: {valid}")
+
+    text = get_section_text(ticker.upper(), section, max_chars=5000)
+    filing = get_latest_10k(ticker.upper())
+
+    if text is None or filing is None:
+        raise HTTPException(status_code=404, detail=f"Section '{section}' not found in {ticker.upper()} 10-K")
+
+    return {
+        "ticker": ticker.upper(),
+        "section": section,
+        "section_label": SECTION_LABELS[section],
+        "filing_date": filing["filing_date"],
+        "filing_url": filing["filing_url"],
+        "text": text,
+    }
 
 
 # ── Plaid endpoints ───────────────────────────────────────────────────────────

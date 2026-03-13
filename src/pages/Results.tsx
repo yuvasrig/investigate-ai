@@ -8,12 +8,14 @@ import { TrafficLight } from "@/components/TrafficLight";
 import { PortfolioExposure, ExposureData } from "@/components/PortfolioExposure";
 import DynamicIntentBadge from "@/components/DynamicIntentBadge";
 import EvaluatedScenariosMatrix from "@/components/EvaluatedScenariosMatrix";
+import CitationModal from "@/components/CitationModal";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
   AgentEvidenceScore,
   BearAnalysis,
   BullAnalysis,
   EvidenceAssessment,
+  SecFiling,
   StrategistAnalysis,
   VerifiedClaim,
 } from "@/services/api";
@@ -200,27 +202,54 @@ function ClaimList({
   claims,
   icon,
   iconColor,
+  ticker,
+  secFiling,
 }: {
   claims: VerifiedClaim[];
   icon: React.ReactNode;
   iconColor: string;
+  ticker?: string;
+  secFiling?: SecFiling | null;
 }) {
+  const [citation, setCitation] = useState<{ claim: VerifiedClaim } | null>(null);
+
   return (
-    <ul className="space-y-2">
-      {claims.map((item, index) => (
-        <li key={`${item.claim}-${index}`} className="flex items-start gap-2 text-sm text-muted-foreground">
-          <span className={`shrink-0 mt-0.5 ${iconColor}`}>{icon}</span>
-          <div className="min-w-0">
-            <span>{item.claim}</span>
-            {item.is_speculative && (
-              <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-                speculative
-              </span>
-            )}
-          </div>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="space-y-2">
+        {claims.map((item, index) => (
+          <li key={`${item.claim}-${index}`} className="flex items-start gap-2 text-sm text-muted-foreground">
+            <span className={`shrink-0 mt-0.5 ${iconColor}`}>{icon}</span>
+            <div className="min-w-0">
+              <span>{item.claim}</span>
+              {item.is_speculative && (
+                <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                  speculative
+                </span>
+              )}
+              {item.sec_section && ticker && (
+                <button
+                  onClick={() => setCitation({ claim: item })}
+                  className="ml-2 inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 hover:bg-blue-200 transition-colors cursor-pointer"
+                  title={`View SEC source: ${item.sec_section}`}
+                >
+                  SEC ↗
+                </button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {citation && ticker && (
+        <CitationModal
+          ticker={ticker}
+          secSection={citation.claim.sec_section!}
+          claimText={citation.claim.claim}
+          filingUrl={secFiling?.filing_url}
+          onClose={() => setCitation(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -367,9 +396,13 @@ function WeightedScoresPanel({ evidence }: { evidence: EvidenceAssessment }) {
 function BullCard({
   bull_analysis,
   evidence,
+  ticker,
+  secFiling,
 }: {
   bull_analysis: BullAnalysis;
   evidence: EvidenceAssessment | null;
+  ticker?: string;
+  secFiling?: SecFiling | null;
 }) {
   const [showEvidence, setShowEvidence] = useState(false);
   const speculativeClaimsCount =
@@ -404,12 +437,16 @@ function BullCard({
           claims={bull_analysis.competitive_advantages}
           icon={<CheckCircle2 size={14} />}
           iconColor="text-bull"
+          ticker={ticker}
+          secFiling={secFiling}
         />
         <p className="text-xs font-semibold text-foreground mt-5 mb-2">Growth Catalysts</p>
         <ClaimList
           claims={bull_analysis.growth_catalysts}
           icon={<TrendingUp size={13} />}
           iconColor="text-bull"
+          ticker={ticker}
+          secFiling={secFiling}
         />
         {bull_analysis.valuation_justification && (
           <div className="mt-4 p-3 bg-bull/5 rounded-lg">
@@ -448,9 +485,13 @@ function BullCard({
 function BearCard({
   bear_analysis,
   evidence,
+  ticker,
+  secFiling,
 }: {
   bear_analysis: BearAnalysis;
   evidence: EvidenceAssessment | null;
+  ticker?: string;
+  secFiling?: SecFiling | null;
 }) {
   const [showEvidence, setShowEvidence] = useState(false);
   const speculativeClaimsCount =
@@ -485,6 +526,8 @@ function BearCard({
           claims={bear_analysis.competition_threats}
           icon={<AlertCircle size={14} />}
           iconColor="text-bear"
+          ticker={ticker}
+          secFiling={secFiling}
         />
         <div className="mt-5 p-3 bg-secondary rounded-lg">
           <p className="text-xs font-semibold text-foreground mb-1">Valuation Concerns</p>
@@ -499,6 +542,8 @@ function BearCard({
               claims={bear_analysis.cyclical_risks}
               icon={<AlertTriangle size={13} />}
               iconColor="text-bear"
+              ticker={ticker}
+              secFiling={secFiling}
             />
           </div>
         )}
@@ -641,6 +686,7 @@ const Results = () => {
     market_data,
     traffic_light,
     portfolio_exposure,
+    sec_filing,
   } = analysisResult;
 
   const evidence = final_recommendation.evidence_assessment ?? null;
@@ -799,10 +845,17 @@ const Results = () => {
           <BullCard
             bull_analysis={bull_analysis}
             evidence={evidence}
+            ticker={ticker}
+            secFiling={sec_filing}
           />
 
           {/* Bear */}
-          <BearCard bear_analysis={bear_analysis} evidence={evidence} />
+          <BearCard
+            bear_analysis={bear_analysis}
+            evidence={evidence}
+            ticker={ticker}
+            secFiling={sec_filing}
+          />
 
           {/* Strategist */}
           <StrategistCard strategist_analysis={strategist_analysis} evidence={evidence} />

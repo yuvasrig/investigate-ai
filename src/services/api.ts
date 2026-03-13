@@ -18,6 +18,31 @@ export interface ConfidenceBreakdown {
 export interface VerifiedClaim {
   claim: string;
   is_speculative: boolean;
+  sec_section?: string | null;  // e.g. "Item 1A - Risk Factors"
+}
+
+export interface SecFiling {
+  cik: string;
+  ticker: string;
+  accession_number: string;
+  filing_date: string;
+  filing_url: string;
+  viewer_url: string;
+  section_urls: {
+    business: string;
+    risk_factors: string;
+    mda: string;
+    financials: string;
+  };
+}
+
+export interface SecExcerpt {
+  ticker: string;
+  section: string;
+  section_label: string;
+  filing_date: string;
+  filing_url: string;
+  text: string;
 }
 
 export interface BullAnalysis {
@@ -161,6 +186,7 @@ export interface AnalysisResponse {
     sizing_rationale: string;
     scale_factor: number;
   } | null;
+  sec_filing?: SecFiling | null;
   execution_time: number;
   timestamp: string;
 }
@@ -241,6 +267,19 @@ export async function getHistory(
   offset = 0
 ): Promise<HistoryItem[]> {
   return apiCall<HistoryItem[]>(`/history?limit=${limit}&offset=${offset}`);
+}
+
+/** Fetch SEC 10-K filing metadata for a ticker. */
+export async function getSecFiling(ticker: string): Promise<SecFiling> {
+  return apiCall<SecFiling>(`/api/sec/${ticker}/filing`);
+}
+
+/** Fetch a plain-text excerpt from a specific 10-K section. */
+export async function getSecExcerpt(
+  ticker: string,
+  section: "business" | "risk_factors" | "mda" | "financials"
+): Promise<SecExcerpt> {
+  return apiCall<SecExcerpt>(`/api/sec/${ticker}/excerpt?section=${section}`);
 }
 
 /** Fetch multiple analyses side-by-side for comparison. */

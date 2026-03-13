@@ -34,6 +34,15 @@ def _coerce_money_like_number(value):
 class VerifiedClaim(BaseModel):
     claim: str = Field(description="The analytical claim or data point")
     is_speculative: bool = Field(description="True if the claim lacks concrete verification from 10-K or grounding data")
+    sec_section: Optional[str] = Field(
+        default=None,
+        description=(
+            "SEC 10-K section this claim is sourced from. "
+            "Use one of: 'Item 1 - Business', 'Item 1A - Risk Factors', "
+            "'Item 7 - MD&A', 'Item 8 - Financial Statements'. "
+            "Null if the claim is not directly from the SEC filing."
+        ),
+    )
 
 class BullAnalysis(BaseModel):
     competitive_advantages: list[VerifiedClaim] = Field(description="Key competitive moats and advantages")
@@ -246,7 +255,11 @@ class AnalysisResponse(BaseModel):
     rag_summary: Optional[dict] = None
     traffic_light: Optional[TrafficLightResult] = None
     portfolio_exposure: Optional[dict] = None
-    kelly_sizing: Optional[KellySizingResult] = None   # NEW
+    kelly_sizing: Optional[KellySizingResult] = None
+    sec_filing: Optional[dict] = Field(
+        default=None,
+        description="SEC 10-K filing metadata: {filing_url, viewer_url, filing_date, section_urls}",
+    )
     execution_time: float
     timestamp: str
 

@@ -81,10 +81,11 @@ def _coerce_claim_list(value) -> list[dict]:
                 {
                     "claim": str(claim_text),
                     "is_speculative": bool(item.get("is_speculative", False)),
+                    "sec_section": item.get("sec_section"),
                 }
             )
         else:
-            result.append({"claim": str(item), "is_speculative": False})
+            result.append({"claim": str(item), "is_speculative": False, "sec_section": None})
     return result
 
 
@@ -156,11 +157,11 @@ _BULL_SKELETON = """\
 Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper keys):
 {
   "competitive_advantages": [
-    {"claim": "string", "is_speculative": true | false},
+    {"claim": "string", "is_speculative": true | false, "sec_section": "Item 1A - Risk Factors" | "Item 7 - MD&A" | "Item 1 - Business" | "Item 8 - Financial Statements" | null},
     ...
   ],
   "growth_catalysts": [
-    {"claim": "string", "is_speculative": true | false},
+    {"claim": "string", "is_speculative": true | false, "sec_section": "Item 1A - Risk Factors" | "Item 7 - MD&A" | "Item 1 - Business" | "Item 8 - Financial Statements" | null},
     ...
   ],
   "valuation_justification": "string",
@@ -174,12 +175,12 @@ _BEAR_SKELETON = """\
 Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper keys):
 {
   "competition_threats": [
-    {"claim": "string", "is_speculative": true | false},
+    {"claim": "string", "is_speculative": true | false, "sec_section": "Item 1A - Risk Factors" | "Item 7 - MD&A" | "Item 1 - Business" | "Item 8 - Financial Statements" | null},
     ...
   ],
   "valuation_concerns": "string",
   "cyclical_risks": [
-    {"claim": "string", "is_speculative": true | false},
+    {"claim": "string", "is_speculative": true | false, "sec_section": "Item 1A - Risk Factors" | "Item 7 - MD&A" | "Item 1 - Business" | "Item 8 - Financial Statements" | null},
     ...
   ],
   "worst_case_target": <number>,
@@ -400,6 +401,7 @@ ANALYSIS REQUIREMENTS & CHAIN-OF-VERIFICATION (CoVe):
 6. Conviction 0-10.
 7. SCENARIO EVALUATION: For any macro stress-test scenarios provided below, evaluate the asset utilizing historical analogs from the RAG context.
 8. CHAIN-OF-VERIFICATION: You MUST verify every numerical claim (margins, growth rates, etc.) against the LIVE MARKET DATA or SEC FILINGS (RAG) sections. Unverified claims MUST be flagged as `is_speculative: true` in your JSON output.
+9. SEC CITATIONS: When a claim is directly sourced from the SEC 10-K grounding block above, set `sec_section` to the matching item: "Item 1 - Business", "Item 1A - Risk Factors", "Item 7 - MD&A", or "Item 8 - Financial Statements". Set null if not from the SEC filing.
 
 STRESS-TEST SCENARIOS TO EVALUATE:
 {scenario_text}
@@ -511,6 +513,7 @@ ANALYSIS REQUIREMENTS & CHAIN-OF-VERIFICATION (CoVe):
 5. Conviction 0-10.
 6. SCENARIO EVALUATION: For any macro stress-test scenarios provided below, evaluate the asset utilizing historical analogs from the RAG context (e.g., 2008 GFC, 1970s stagflation). 
 7. CHAIN-OF-VERIFICATION: You MUST verify every numerical claim against the LIVE MARKET DATA or SEC FILINGS (RAG) sections. Unverified claims MUST be flagged as `is_speculative: true` in your JSON output.
+8. SEC CITATIONS: When a claim is directly sourced from the SEC 10-K grounding block above, set `sec_section` to the matching item: "Item 1 - Business", "Item 1A - Risk Factors", "Item 7 - MD&A", or "Item 8 - Financial Statements". Set null if not from the SEC filing.
 
 STRESS-TEST SCENARIOS TO EVALUATE:
 {scenario_text}

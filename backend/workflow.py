@@ -30,6 +30,7 @@ from agents import run_bull_agent, run_bear_agent, run_strategist_agent, run_jud
 from agents.intent_router import route_intent
 from tools import fetch_full_market_data
 from rag.retriever import ingest_ticker, retrieve_all_agents
+from sec_fetcher import get_latest_10k, get_sec_grounding_context
 
 T = TypeVar("T")
 
@@ -55,6 +56,9 @@ class InvestmentState(TypedDict):
     # Per-agent RAG context strings (populated by rag_ingest node)
     rag_context: Optional[dict[str, str]]   # {"bull": str, "bear": str, ...}
     rag_summary: Optional[dict]              # {"sec": N, "news": M, "cache_hit": bool}
+
+    # SEC 10-K filing metadata (populated by rag_ingest node)
+    sec_filing: Optional[dict]              # {filing_url, viewer_url, filing_date, section_urls}
 
     # Agent outputs
     bull_analysis: Optional[BullAnalysis]
@@ -101,7 +105,18 @@ def rag_node(state: InvestmentState) -> dict[str, Any]:
     rag_summary = ingest_ticker(ticker, market_data)
     rag_context = retrieve_all_agents(ticker)
 
-    return {"rag_context": rag_context, "rag_summary": rag_summary}
+    # SEC 10-K grounding — fetch in parallel with RAG (non-blocking; None if unavailable)
+    sec_filing = get_latest_10k(ticker)
+    sec_context = get_sec_grounding_context(ticker)
+
+    # Prepend SEC grounding to every agent's RAG context block
+    if sec_context:
+        rag_context = {
+            role: sec_context + "\n\n" + ctx
+            for role, ctx in rag_context.items()
+        }
+
+    return {"rag_context": rag_context, "rag_summary": rag_summary, "sec_filing": sec_filing}
 
 
 # ── Node 3 — Parallel agent analysis ─────────────────────────────────────────
@@ -368,6 +383,7 @@ def run_analysis(
         "market_data": None,
         "rag_context": None,
         "rag_summary": None,
+        "sec_filing": None,
         "bull_analysis": None,
         "bear_analysis": None,
         "strategist_analysis": None,

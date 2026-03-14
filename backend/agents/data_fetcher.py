@@ -247,14 +247,14 @@ def fetch_earnings_highlights(ticker: str, market_data: dict) -> str:
 
 ETF_WEIGHTS: dict[str, dict[str, float]] = {
     "SPY": {"NVDA": 0.068, "AAPL": 0.070, "MSFT": 0.065, "AMZN": 0.038, "TSLA": 0.024,
-            "GOOGL": 0.035, "META": 0.026, "AVGO": 0.020},
+            "GOOGL": 0.035, "META": 0.026, "AVGO": 0.020, "ACN": 0.0020},
     "QQQ": {"NVDA": 0.099, "AAPL": 0.083, "MSFT": 0.082, "AMZN": 0.054, "TSLA": 0.039,
             "GOOGL": 0.051, "META": 0.045, "AVGO": 0.032},
     "VOO": {"NVDA": 0.068, "AAPL": 0.070, "MSFT": 0.065, "AMZN": 0.038, "TSLA": 0.024,
-            "GOOGL": 0.035, "META": 0.026, "AVGO": 0.020},
+            "GOOGL": 0.035, "META": 0.026, "AVGO": 0.020, "ACN": 0.0020},
     "VTI": {"NVDA": 0.054, "AAPL": 0.056, "MSFT": 0.052, "AMZN": 0.030, "TSLA": 0.019,
-            "GOOGL": 0.028, "META": 0.020, "AVGO": 0.016},
-    "IVV": {"NVDA": 0.068, "AAPL": 0.070, "MSFT": 0.065, "AMZN": 0.038, "TSLA": 0.024},
+            "GOOGL": 0.028, "META": 0.020, "AVGO": 0.016, "ACN": 0.0017},
+    "IVV": {"NVDA": 0.068, "AAPL": 0.070, "MSFT": 0.065, "AMZN": 0.038, "TSLA": 0.024, "ACN": 0.0020},
 }
 
 

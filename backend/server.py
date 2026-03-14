@@ -214,12 +214,48 @@ def _get_sec_filing_for_run(ticker: str):
     }
 
 
-def _enrich_cached_analysis(result: dict, ticker: str) -> dict:
-    if result.get("sec_filing") is None:
+def _get_news_links_for_run(ticker: str) -> list[dict]:
+    news_docs = rag_store.source_metadatas(ticker.upper(), "news", limit=10)
+    if not news_docs:
+        return []
+
+    seen: set[str] = set()
+    links: list[dict] = []
+    for doc in news_docs:
+        url = (doc.get("url") or "").strip()
+        title = (doc.get("title") or "").strip()
+        if not url or not title or url in seen:
+            continue
+        seen.add(url)
+        links.append({
+            "title": title,
+            "publisher": (doc.get("publisher") or "").strip(),
+            "link": url,
+        })
+    return links
+
+
+def _enrich_analysis_payload(result: dict, ticker: str) -> dict:
+    updated = dict(result)
+
+    if updated.get("sec_filing") is None:
         sec_filing = _get_sec_filing_for_run(ticker)
         if sec_filing is not None:
-            return {**result, "sec_filing": sec_filing}
-    return result
+            updated["sec_filing"] = sec_filing
+
+    market_data = dict(updated.get("market_data") or {})
+    recent_news = market_data.get("recent_news")
+    if not isinstance(recent_news, list) or len(recent_news) == 0:
+        news_links = _get_news_links_for_run(ticker)
+        if news_links:
+            market_data["recent_news"] = news_links
+            updated["market_data"] = market_data
+
+    return updated
+
+
+def _enrich_cached_analysis(result: dict, ticker: str) -> dict:
+    return _enrich_analysis_payload(result, ticker)
 
 
 def _with_user_query(result: dict, user_query: str | None) -> dict:
@@ -379,7 +415,7 @@ async def analyze_stream(request: Request, body: AnalysisRequest, db: Session = 
             yield f"data: {json.dumps({'error': f'Validation error: {e.errors()}'})}\n\n"
             return
             
-        response_dict = response.model_dump()
+        response_dict = _enrich_analysis_payload(response.model_dump(), ticker)
         
         try:
             from database import SessionLocal
@@ -517,7 +553,7 @@ async def analyze_sync(request: Request, body: AnalysisRequest, db: Session = De
     except ValidationError as e:
         raise HTTPException(status_code=500, detail=f"Validation error: {e.errors()}")
 
-    response_dict = response.model_dump()
+    response_dict = _enrich_analysis_payload(response.model_dump(), ticker)
 
     try:
         save_analysis(

@@ -8,6 +8,7 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    allowedHosts: ["investigate.yuvasrig.com", "localhost", "127.0.0.1"],
     hmr: {
       overlay: false,
     },

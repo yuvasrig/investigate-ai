@@ -64,7 +64,7 @@ ETF_HOLDINGS: dict[str, dict[str, float]] = {
         "NVDA": 0.068, "AAPL": 0.070, "MSFT": 0.065,
         "AMZN": 0.038, "TSLA": 0.024, "META": 0.025,
         "GOOGL": 0.042, "GOOG": 0.018, "BRK.B": 0.018,
-        "JPM": 0.015, "LLY": 0.013,
+        "JPM": 0.015, "LLY": 0.013, "ACN": 0.0020,
     },
     "QQQ": {
         "NVDA": 0.099, "AAPL": 0.083, "MSFT": 0.082,
@@ -76,18 +76,18 @@ ETF_HOLDINGS: dict[str, dict[str, float]] = {
         "NVDA": 0.068, "AAPL": 0.070, "MSFT": 0.065,
         "AMZN": 0.038, "TSLA": 0.024, "META": 0.025,
         "GOOGL": 0.042, "GOOG": 0.018, "BRK.B": 0.018,
-        "JPM": 0.015, "LLY": 0.013,
+        "JPM": 0.015, "LLY": 0.013, "ACN": 0.0020,
     },
     "VTI": {
         "NVDA": 0.054, "AAPL": 0.056, "MSFT": 0.052,
         "AMZN": 0.030, "TSLA": 0.019, "META": 0.020,
         "GOOGL": 0.034, "GOOG": 0.015, "BRK.B": 0.015,
-        "JPM": 0.012, "LLY": 0.011,
+        "JPM": 0.012, "LLY": 0.011, "ACN": 0.0017,
     },
     "IVV": {
         "NVDA": 0.068, "AAPL": 0.070, "MSFT": 0.065,
         "AMZN": 0.038, "TSLA": 0.024, "META": 0.025,
-        "GOOGL": 0.042, "GOOG": 0.018, "BRK.B": 0.018,
+        "GOOGL": 0.042, "GOOG": 0.018, "BRK.B": 0.018, "ACN": 0.0020,
     },
 }
 

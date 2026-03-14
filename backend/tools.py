@@ -83,84 +83,176 @@ def _safe(val):
     return val
 
 
-# ── FMP fallback ──────────────────────────────────────────────────────────────
+# ── FMP primary data source ───────────────────────────────────────────────────
+_FMP_BASE = "https://financialmodelingprep.com/stable"
 
-def _fetch_fmp(ticker: str) -> dict:
-    """
-    Fetch basic quote + profile from Financial Modeling Prep (free tier).
-    Returns {} if FMP_API_KEY is not set or the call fails.
-    Free tier: 250 calls/day, no CC required — sign up at financialmodelingprep.com
-    """
+
+def _fmp_get(path: str) -> list | dict:
+    """GET a FMP stable endpoint. Returns [] on any error."""
     if not _FMP_KEY:
-        return {}
+        return []
     try:
-        base = "https://financialmodelingprep.com/api/v3"
-        profile = requests.get(f"{base}/profile/{ticker}?apikey={_FMP_KEY}", timeout=8).json()
-        quote   = requests.get(f"{base}/quote/{ticker}?apikey={_FMP_KEY}", timeout=8).json()
-
-        p = profile[0] if isinstance(profile, list) and profile else {}
-        q = quote[0]   if isinstance(quote,   list) and quote   else {}
-
-        return {
-            "longName":          p.get("companyName"),
-            "currentPrice":      q.get("price"),
-            "previousClose":     q.get("previousClose"),
-            "marketCap":         q.get("marketCap"),
-            "trailingPE":        q.get("pe"),
-            "beta":              p.get("beta"),
-            "fiftyTwoWeekHigh":  q.get("yearHigh"),
-            "fiftyTwoWeekLow":   q.get("yearLow"),
-            "dividendYield":     p.get("lastDiv"),
-            "sector":            p.get("sector"),
-            "industry":          p.get("industry"),
-            "country":           p.get("country"),
-            "website":           p.get("website"),
-            "business_summary":  (p.get("description") or "")[:400],
-            "_source":           "fmp",
-        }
+        sep = "&" if "?" in path else "?"
+        r = requests.get(f"{_FMP_BASE}/{path}{sep}apikey={_FMP_KEY}", timeout=8)
+        if r.ok:
+            return r.json()
     except Exception:
-        return {}
+        pass
+    return []
+
+
+def _fmp_first(path: str) -> dict:
+    result = _fmp_get(path)
+    return result[0] if isinstance(result, list) and result else {}
 
 
 # ── Main data fetcher ─────────────────────────────────────────────────────────
 
 def fetch_full_market_data(ticker: str) -> dict:
     """
-    Fetch a comprehensive real-time snapshot for a ticker using yfinance.
+    Fetch a comprehensive real-time snapshot via Financial Modeling Prep (primary)
+    with yfinance as a last-resort fallback.
 
-    Covers:
-    - Price & valuation (PE, PB, PS, EPS, beta)
-    - Growth & profitability (revenue, margins, ROE, ROA)
-    - Financial health (cash, debt, FCF, short interest)
-    - Analyst consensus (rating, price targets, # analysts)
-    - Quarterly revenue trend (last 4 quarters)
-    - Recent news headlines (last 5)
-    - Company profile (sector, industry, business summary)
+    FMP free tier: ~250-750 calls/day depending on plan.
+    Set FMP_API_KEY in .env to enable. Without it, falls back to yfinance.
     """
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     ticker = ticker.upper()
 
+    # ── Try FMP first if key is available ─────────────────────────────────────
+    if _FMP_KEY:
+        try:
+            profile  = _fmp_first(f"profile?symbol={ticker}")
+            quote    = _fmp_first(f"quote?symbol={ticker}")
+            ratios   = _fmp_first(f"ratios-ttm?symbol={ticker}")
+            km       = _fmp_first(f"key-metrics-ttm?symbol={ticker}")
+            est_list = _fmp_get(f"analyst-estimates?symbol={ticker}&period=annual&limit=1")
+            est      = est_list[0] if isinstance(est_list, list) and est_list else {}
+            inc_list = _fmp_get(f"income-statement?symbol={ticker}&period=quarter&limit=4")
+
+            if not profile and not quote:
+                pass  # fall through to yfinance
+            else:
+                # Parse 52W range from profile "169.21-288.62" string
+                range_str = profile.get("range", "")
+                try:
+                    low_52, high_52 = (float(x) for x in range_str.split("-"))
+                except Exception:
+                    low_52 = high_52 = None
+
+                # Revenue growth from quarterly income statements
+                rev_growth = None
+                quarterly_revenue = []
+                quarterly_earnings = []
+                if isinstance(inc_list, list) and len(inc_list) >= 2:
+                    for q in inc_list:
+                        if q.get("revenue"):
+                            quarterly_revenue.append({"period": str(q.get("date", ""))[:10], "revenue": int(q["revenue"])})
+                        if q.get("netIncome"):
+                            quarterly_earnings.append({"period": str(q.get("date", ""))[:10], "net_income": int(q["netIncome"])})
+                    r0 = inc_list[0].get("revenue") or 0
+                    r4 = inc_list[-1].get("revenue") or 0
+                    if r4 > 0:
+                        rev_growth = (r0 - r4) / r4
+
+                # EV / Revenue from key metrics
+                ev = km.get("enterpriseValueTTM")
+                rev_ttm = sum(q.get("revenue", 0) for q in (inc_list[:4] if isinstance(inc_list, list) else []))
+                ev_to_rev = _safe(ev / rev_ttm) if ev and rev_ttm else None
+
+                data: dict = {
+                    "ticker": ticker,
+                    "fetched_at": now,
+                    "_source": "fmp",
+
+                    # ── Price & valuation ──────────────────────────────────────
+                    "longName": profile.get("companyName") or quote.get("name"),
+                    "shortName": profile.get("companyName"),
+                    "current_price": _safe(quote.get("price") or profile.get("price")),
+                    "previous_close": _safe(quote.get("previousClose")),
+                    "day_change_pct": _safe(quote.get("changePercentage")),
+                    "52_week_high": _safe(quote.get("yearHigh") or high_52),
+                    "52_week_low": _safe(quote.get("yearLow") or low_52),
+                    "market_cap": _safe(quote.get("marketCap") or profile.get("marketCap")),
+                    "pe_trailing": _safe(ratios.get("priceToEarningsRatioTTM")),
+                    "pe_forward": None,  # not in FMP free tier
+                    "peg_ratio": _safe(ratios.get("priceToEarningsGrowthRatioTTM")),
+                    "price_to_book": _safe(ratios.get("priceToBookRatioTTM")),
+                    "price_to_sales": _safe(ratios.get("priceToSalesRatioTTM")),
+                    "ev_to_ebitda": _safe(ratios.get("enterpriseValueMultipleTTM")),
+                    "ev_to_revenue": _safe(ev_to_rev),
+                    "eps_trailing": _safe(ratios.get("revenuePerShareTTM")),
+                    "eps_forward": _safe(est.get("epsAvg")),
+                    "beta": _safe(profile.get("beta")),
+                    "dividend_yield": _safe(ratios.get("dividendYieldTTM")),
+
+                    # ── Growth & profitability ─────────────────────────────────
+                    "revenue_ttm": _safe(rev_ttm or None),
+                    "revenue_growth_yoy": _safe(rev_growth),
+                    "earnings_growth_yoy": None,
+                    "earnings_quarterly_growth": None,
+                    "gross_margin": _safe(ratios.get("grossProfitMarginTTM")),
+                    "operating_margin": _safe(ratios.get("operatingProfitMarginTTM")),
+                    "net_profit_margin": _safe(ratios.get("netProfitMarginTTM")),
+                    "ebitda_margin": _safe(ratios.get("ebitdaMarginTTM")),
+                    "roe": _safe(km.get("returnOnEquityTTM")),
+                    "roa": _safe(km.get("returnOnAssetsTTM")),
+
+                    # ── Financial health ──────────────────────────────────────
+                    "total_cash": None,
+                    "total_debt": None,
+                    "debt_to_equity": _safe(ratios.get("debtToEquityRatioTTM")),
+                    "current_ratio": _safe(ratios.get("currentRatioTTM")),
+                    "quick_ratio": _safe(ratios.get("quickRatioTTM")),
+                    "free_cash_flow": None,
+                    "operating_cash_flow": None,
+                    "short_percent_float": None,
+                    "shares_outstanding": None,
+
+                    # ── Analyst consensus ─────────────────────────────────────
+                    "analyst_mean_target": None,
+                    "analyst_median_target": None,
+                    "analyst_high_target": None,
+                    "analyst_low_target": None,
+                    "analyst_recommendation": None,
+                    "analyst_count": _safe(est.get("numAnalystsEps")),
+
+                    # ── Company profile ───────────────────────────────────────
+                    "sector": profile.get("sector", "Unknown"),
+                    "industry": profile.get("industry", "Unknown"),
+                    "business_summary": (profile.get("description") or "")[:400],
+                    "employees": profile.get("fullTimeEmployees"),
+                    "country": profile.get("country"),
+                    "website": profile.get("website"),
+
+                    "quarterly_revenue": quarterly_revenue,
+                    "quarterly_earnings": quarterly_earnings,
+                    "recent_news": [],
+                }
+                return data
+
+        except Exception:
+            pass  # fall through to yfinance
+
+    # ── yfinance fallback ──────────────────────────────────────────────────────
     try:
-        stock = yf.Ticker(ticker)
+        session = requests_cache.CachedSession("yfinance_cache", expire_after=3600)
+        stock = yf.Ticker(ticker, session=session)
         info = stock.info
 
-        # Guard: if yfinance returns an empty/rate-limited response, try FMP
         if not info or (not info.get("regularMarketPrice") and not info.get("currentPrice")):
-            fmp = _fetch_fmp(ticker)
-            if fmp:
-                info = fmp  # partial fallback — only covers display fields
-            else:
-                return {
-                    "ticker": ticker,
-                    "error": f"No market data found for '{ticker}'. Check the ticker symbol.",
-                    "fetched_at": now,
-                }
+            return {
+                "ticker": ticker,
+                "error": f"No market data found for '{ticker}'. Check the ticker symbol.",
+                "fetched_at": now,
+            }
 
         data: dict = {
             "ticker": ticker,
             "fetched_at": now,
-
-            # ── Price & valuation ──────────────────────────────────────────────
+            "_source": "yfinance",
+            "longName": info.get("longName") or info.get("shortName"),
+            "shortName": info.get("shortName"),
             "current_price": _safe(info.get("currentPrice") or info.get("regularMarketPrice")),
             "previous_close": _safe(info.get("previousClose")),
             "day_change_pct": _safe(info.get("regularMarketChangePercent")),
@@ -178,8 +270,6 @@ def fetch_full_market_data(ticker: str) -> dict:
             "eps_forward": _safe(info.get("forwardEps")),
             "beta": _safe(info.get("beta")),
             "dividend_yield": _safe(info.get("dividendYield")),
-
-            # ── Growth & profitability ─────────────────────────────────────────
             "revenue_ttm": _safe(info.get("totalRevenue")),
             "revenue_growth_yoy": _safe(info.get("revenueGrowth")),
             "earnings_growth_yoy": _safe(info.get("earningsGrowth")),
@@ -190,8 +280,6 @@ def fetch_full_market_data(ticker: str) -> dict:
             "ebitda_margin": _safe(info.get("ebitdaMargins")),
             "roe": _safe(info.get("returnOnEquity")),
             "roa": _safe(info.get("returnOnAssets")),
-
-            # ── Financial health ──────────────────────────────────────────────
             "total_cash": _safe(info.get("totalCash")),
             "total_debt": _safe(info.get("totalDebt")),
             "debt_to_equity": _safe(info.get("debtToEquity")),
@@ -201,64 +289,47 @@ def fetch_full_market_data(ticker: str) -> dict:
             "operating_cash_flow": _safe(info.get("operatingCashflow")),
             "short_percent_float": _safe(info.get("shortPercentOfFloat")),
             "shares_outstanding": _safe(info.get("sharesOutstanding")),
-
-            # ── Analyst consensus ─────────────────────────────────────────────
             "analyst_mean_target": _safe(info.get("targetMeanPrice")),
             "analyst_median_target": _safe(info.get("targetMedianPrice")),
             "analyst_high_target": _safe(info.get("targetHighPrice")),
             "analyst_low_target": _safe(info.get("targetLowPrice")),
             "analyst_recommendation": info.get("recommendationKey"),
             "analyst_count": info.get("numberOfAnalystOpinions"),
-
-            # ── Company profile ───────────────────────────────────────────────
             "sector": info.get("sector", "Unknown"),
             "industry": info.get("industry", "Unknown"),
             "business_summary": (info.get("longBusinessSummary") or "")[:400],
             "employees": info.get("fullTimeEmployees"),
             "country": info.get("country"),
             "website": info.get("website"),
-
-            # Populated below
             "quarterly_revenue": [],
             "quarterly_earnings": [],
             "recent_news": [],
         }
 
-        # ── Quarterly revenue & earnings trend ───────────────────────────────
         try:
             q_income = stock.quarterly_income_stmt
             if q_income is not None and not q_income.empty:
-                cols = q_income.columns[:4]          # most recent 4 quarters
-
+                cols = q_income.columns[:4]
                 if "Total Revenue" in q_income.index:
                     rev_row = q_income.loc["Total Revenue"]
                     data["quarterly_revenue"] = [
                         {"period": str(col)[:10], "revenue": int(rev_row[col])}
-                        for col in cols
-                        if _safe(rev_row.get(col)) is not None
+                        for col in cols if _safe(rev_row.get(col)) is not None
                     ]
-
                 if "Net Income" in q_income.index:
                     ni_row = q_income.loc["Net Income"]
                     data["quarterly_earnings"] = [
                         {"period": str(col)[:10], "net_income": int(ni_row[col])}
-                        for col in cols
-                        if _safe(ni_row.get(col)) is not None
+                        for col in cols if _safe(ni_row.get(col)) is not None
                     ]
         except Exception:
-            pass  # quarterly data is a nice-to-have
+            pass
 
-        # ── Recent news headlines ─────────────────────────────────────────────
         try:
             raw_news = stock.news or []
             data["recent_news"] = [
-                {
-                    "title": item.get("title", ""),
-                    "publisher": item.get("publisher", ""),
-                    "link": item.get("link", ""),
-                }
-                for item in raw_news[:5]
-                if item.get("title")
+                {"title": n.get("title", ""), "publisher": n.get("publisher", ""), "link": n.get("link", "")}
+                for n in raw_news[:5] if n.get("title")
             ]
         except Exception:
             pass

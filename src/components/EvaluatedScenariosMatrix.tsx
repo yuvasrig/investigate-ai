@@ -33,11 +33,15 @@ export default function EvaluatedScenariosMatrix({ scenarios }: Props) {
             </div>
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                Verified Analog
+                Verified Analogs
               </p>
-              <p className="mt-1 text-sm text-slate-600">
-                {scenario.verified_analog_used}
-              </p>
+              <div className="mt-1 space-y-1">
+                {scenario.verified_analogs_used.map((analog, analogIndex) => (
+                  <p key={`${scenario.scenario_name}-${analogIndex}`} className="text-sm text-slate-600">
+                    {analog}
+                  </p>
+                ))}
+              </div>
             </div>
           </div>
         ))}

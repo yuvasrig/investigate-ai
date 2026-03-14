@@ -21,6 +21,7 @@ from schemas import (
     TaxHarvestRequest,
 )
 from workflow import get_workflow, InvestmentState
+from agents.intent_router import route_intent
 import json
 import asyncio
 from llm_factory import health_check as llm_health_check
@@ -30,9 +31,9 @@ from services.cache_service import get_cached, set_cached
 from services.export_service import generate_pdf
 from portfolio_analyzer import calculate_hidden_exposure, analyze_complete_portfolio
 from sec_fetcher import get_latest_10k, get_section_text, SECTION_LABELS
+from rag import store as rag_store
 from demo_data import DEMO_PORTFOLIO
 import voice_parser as vp
-from kelly import compute_kelly_sizing
 import plaid_service
 import auth as auth_module
 import tax_harvesting
@@ -143,6 +144,93 @@ def _compute_traffic_light(bull, bear, judge) -> TrafficLightResult:
     )
 
 
+def _normalize_rag_summary(rag_summary):
+    """Keep response shape stable across retriever/cache versions."""
+    if not isinstance(rag_summary, dict):
+        return rag_summary
+
+    sec_count = rag_summary.get("sec")
+    if sec_count is None:
+        sec_count = rag_summary.get("sec_docs", 0)
+
+    news_count = rag_summary.get("news")
+    if news_count is None:
+        news_count = rag_summary.get("news_docs", 0)
+
+    return {
+        "sec": sec_count,
+        "news": news_count,
+        "sec_docs": sec_count,
+        "news_docs": news_count,
+        "fmp_docs": rag_summary.get("fmp_docs", 0),
+        "cache_hit": bool(rag_summary.get("cache_hit", False)),
+        "disabled": bool(rag_summary.get("disabled", False)),
+    }
+
+
+def _sec_anchor_for_section(section: str) -> str:
+    return {
+        "business": "#item1",
+        "risk_factors": "#item1a",
+        "mda": "#item7",
+        "financials": "#item8",
+    }.get(section, "")
+
+
+def _get_sec_filing_for_run(ticker: str):
+    filing = get_latest_10k(ticker.upper())
+    if filing is not None:
+        return filing
+
+    sec_docs = rag_store.source_metadatas(ticker.upper(), "sec_edgar", limit=50)
+    if not sec_docs:
+        return None
+
+    preferred = next((doc for doc in sec_docs if doc.get("form") == "10-K"), sec_docs[0])
+    filing_url = preferred.get("url", "")
+    if not filing_url:
+        return None
+
+    section_urls = {
+        "business": filing_url + _sec_anchor_for_section("business"),
+        "risk_factors": filing_url + _sec_anchor_for_section("risk_factors"),
+        "mda": filing_url + _sec_anchor_for_section("mda"),
+        "financials": filing_url + _sec_anchor_for_section("financials"),
+    }
+    for doc in sec_docs:
+        section = doc.get("section")
+        url = doc.get("url")
+        if section in section_urls and url:
+            section_urls[section] = url + _sec_anchor_for_section(section)
+
+    return {
+        "cik": "",
+        "ticker": ticker.upper(),
+        "accession_number": "",
+        "filing_date": "Cached SEC filing",
+        "filing_url": filing_url,
+        "viewer_url": filing_url,
+        "section_urls": section_urls,
+    }
+
+
+def _enrich_cached_analysis(result: dict, ticker: str) -> dict:
+    if result.get("sec_filing") is None:
+        sec_filing = _get_sec_filing_for_run(ticker)
+        if sec_filing is not None:
+            return {**result, "sec_filing": sec_filing}
+    return result
+
+
+def _with_user_query(result: dict, user_query: str | None) -> dict:
+    """Preserve the original user question on fresh and cached responses."""
+    if result.get("user_query"):
+        return result
+    if user_query and user_query.strip():
+        return {**result, "user_query": user_query.strip()}
+    return result
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -182,6 +270,8 @@ async def analyze_stream(request: Request, body: AnalysisRequest, db: Session = 
     if portfolio_value <= 0:
         raise HTTPException(status_code=400, detail="Portfolio total_value must be positive")
 
+    intent = route_intent(body.user_query or "", ticker)
+
     initial_state: InvestmentState = {
         "ticker": ticker,
         "amount": body.amount,
@@ -189,6 +279,8 @@ async def analyze_stream(request: Request, body: AnalysisRequest, db: Session = 
         "risk_tolerance": body.risk_tolerance,
         "time_horizon": body.time_horizon,
         "analysis_action": body.analysis_action,
+        "user_query": body.user_query,
+        "scenarios": intent.scenarios,
         "market_data": None,
         "rag_context": None,
         "rag_summary": None,
@@ -251,20 +343,6 @@ async def analyze_stream(request: Request, body: AnalysisRequest, db: Session = 
             final_state["final_recommendation"],
         )
         
-        kelly_sizing = None
-        try:
-            kelly_dict = compute_kelly_sizing(
-                bull_analysis=final_state["bull_analysis"],
-                bear_analysis=final_state["bear_analysis"],
-                strategist_analysis=final_state["strategist_analysis"],
-                market_data=final_state.get("market_data") or {},
-                proposed_amount=body.amount,
-                portfolio_value=portfolio_value,
-            )
-            kelly_sizing = KellySizingResult(**kelly_dict)
-        except Exception:
-            kelly_sizing = None
-            
         portfolio_exposure = None
         holdings_input = body.portfolio_holdings
         if holdings_input:
@@ -283,16 +361,17 @@ async def analyze_stream(request: Request, body: AnalysisRequest, db: Session = 
                 analysis_id=analysis_id,
                 llm_provider=config.PROVIDER.value,
                 ticker=ticker,
+                user_query=body.user_query,
                 bull_analysis=final_state["bull_analysis"],
                 bear_analysis=final_state["bear_analysis"],
                 strategist_analysis=final_state["strategist_analysis"],
                 final_recommendation=final_state["final_recommendation"],
                 intent=None,
                 market_data=final_state.get("market_data"),
-                rag_summary=final_state.get("rag_summary"),
+                rag_summary=_normalize_rag_summary(final_state.get("rag_summary")),
                 traffic_light=traffic_light,
                 portfolio_exposure=portfolio_exposure,
-                kelly_sizing=kelly_sizing,
+                sec_filing=_get_sec_filing_for_run(ticker),
                 execution_time=elapsed,
                 timestamp=timestamp,
             )
@@ -361,7 +440,9 @@ async def analyze_sync(request: Request, body: AnalysisRequest, db: Session = De
         portfolio_holdings_key,
     )
     if cached:
-        return cached
+        return _with_user_query(_enrich_cached_analysis(cached, ticker), body.user_query)
+
+    intent = route_intent(body.user_query or "", ticker)
 
     initial_state: InvestmentState = {
         "ticker": ticker,
@@ -370,6 +451,8 @@ async def analyze_sync(request: Request, body: AnalysisRequest, db: Session = De
         "risk_tolerance": body.risk_tolerance,
         "time_horizon": body.time_horizon,
         "analysis_action": body.analysis_action,
+        "user_query": body.user_query,
+        "scenarios": intent.scenarios,
         "market_data": None,
         "rag_context": None,
         "rag_summary": None,
@@ -401,20 +484,6 @@ async def analyze_sync(request: Request, body: AnalysisRequest, db: Session = De
         final_state["final_recommendation"],
     )
 
-    kelly_sizing = None
-    try:
-        kelly_dict = compute_kelly_sizing(
-            bull_analysis=final_state["bull_analysis"],
-            bear_analysis=final_state["bear_analysis"],
-            strategist_analysis=final_state["strategist_analysis"],
-            market_data=final_state.get("market_data") or {},
-            proposed_amount=body.amount,
-            portfolio_value=portfolio_value,
-        )
-        kelly_sizing = KellySizingResult(**kelly_dict)
-    except Exception:
-        kelly_sizing = None
-
     portfolio_exposure = None
     if body.portfolio_holdings:
         try:
@@ -431,16 +500,17 @@ async def analyze_sync(request: Request, body: AnalysisRequest, db: Session = De
             analysis_id=analysis_id,
             llm_provider=config.PROVIDER.value,
             ticker=ticker,
+            user_query=body.user_query,
             bull_analysis=final_state["bull_analysis"],
             bear_analysis=final_state["bear_analysis"],
             strategist_analysis=final_state["strategist_analysis"],
             final_recommendation=final_state["final_recommendation"],
             intent=None,
             market_data=final_state.get("market_data"),
-            rag_summary=final_state.get("rag_summary"),
+            rag_summary=_normalize_rag_summary(final_state.get("rag_summary")),
             traffic_light=traffic_light,
             portfolio_exposure=portfolio_exposure,
-            kelly_sizing=kelly_sizing,
+            sec_filing=_get_sec_filing_for_run(ticker),
             execution_time=elapsed,
             timestamp=timestamp,
         )

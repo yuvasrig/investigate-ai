@@ -71,43 +71,60 @@ def ingest_ticker(ticker: str, market_data: dict) -> dict:
     # Always ensure analogs are seeded (idempotent)
     ensure_analogs_seeded()
 
-    if store.is_fresh(ticker):
-        return {"sec_docs": 0, "news_docs": 0, "fmp_docs": 0, "cache_hit": True}
+    stats = store.collection_stats(ticker)
+    sources = stats.get("sources", {})
+    is_fresh = store.is_fresh(ticker)
 
-    sec_count = 0
-    news_count = 0
-    fmp_count = 0
+    sec_count = sources.get("sec_edgar", 0)
+    news_count = sources.get("news", 0)
+    fmp_count = sources.get("fmp_financials", 0)
+
+    if is_fresh and sec_count > 0 and news_count > 0 and fmp_count > 0:
+        return {
+            "sec_docs": sec_count,
+            "news_docs": news_count,
+            "fmp_docs": fmp_count,
+            "cache_hit": True,
+        }
 
     # SEC EDGAR — 10-K risk factors, business overview, MD&A
-    try:
-        sec_ingester = SECIngester()
-        sec_docs = sec_ingester.fetch_documents(ticker)
-        if sec_docs:
-            sec_count = store.upsert_documents(ticker, sec_docs)
-    except Exception:
-        pass  # non-fatal — agents still run with grounding
+    if sec_count == 0 or not is_fresh:
+        try:
+            sec_ingester = SECIngester()
+            sec_docs = sec_ingester.fetch_documents(ticker)
+            if sec_docs:
+                sec_count = store.upsert_documents(ticker, sec_docs)
+        except Exception:
+            pass  # non-fatal — agents still run with grounding
 
     # Full news article text
-    try:
-        news_items = market_data.get("recent_news", [])
-        if news_items:
-            news_ingester = NewsIngester()
-            news_docs = news_ingester.fetch_documents(ticker, news_items)
-            if news_docs:
-                news_count = store.upsert_documents(ticker, news_docs)
-    except Exception:
-        pass
+    if news_count == 0 or not is_fresh:
+        try:
+            news_items = market_data.get("recent_news", [])
+            if news_items:
+                news_ingester = NewsIngester()
+                news_docs = news_ingester.fetch_documents(ticker, news_items)
+                if news_docs:
+                    news_count = store.upsert_documents(ticker, news_docs)
+        except Exception:
+            pass
 
     # FMP annual financials — 4 years of audited income / balance sheet / CF
-    try:
-        fmp_ingester = FMPFinancialsIngester()
-        fmp_docs = fmp_ingester.fetch_documents(ticker)
-        if fmp_docs:
-            fmp_count = store.upsert_documents(ticker, fmp_docs)
-    except Exception:
-        pass
+    if fmp_count == 0 or not is_fresh:
+        try:
+            fmp_ingester = FMPFinancialsIngester()
+            fmp_docs = fmp_ingester.fetch_documents(ticker)
+            if fmp_docs:
+                fmp_count = store.upsert_documents(ticker, fmp_docs)
+        except Exception:
+            pass
 
-    return {"sec_docs": sec_count, "news_docs": news_count, "fmp_docs": fmp_count, "cache_hit": False}
+    return {
+        "sec_docs": sec_count,
+        "news_docs": news_count,
+        "fmp_docs": fmp_count,
+        "cache_hit": is_fresh,
+    }
 
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────

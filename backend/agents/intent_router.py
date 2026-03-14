@@ -2,6 +2,26 @@ import re
 
 from schemas import IntentRouterResult
 
+# Tickers whose business model is directly exposed to an AI disruption scenario —
+# automatically inject that scenario even when the user_query doesn't mention AI.
+_TICKER_SCENARIOS: dict[str, list[str]] = {
+    # Consulting / IT services — at direct risk of AI displacing knowledge work
+    "ACN":  ["AI Disruption Analog"],
+    "IBM":  ["AI Disruption Analog"],
+    "WIT":  ["AI Disruption Analog"],
+    "CTSH": ["AI Disruption Analog"],
+    "INFY": ["AI Disruption Analog"],
+    "TCS":  ["AI Disruption Analog"],
+    "EPAM": ["AI Disruption Analog"],
+    "GLOB": ["AI Disruption Analog"],
+    # Legal / research platforms
+    "LSE":  ["AI Disruption Analog"],
+    "TRI":  ["AI Disruption Analog"],
+    # Big-4 adjacent: staffing & outsourcing
+    "MAN":  ["AI Disruption Analog"],
+    "ADP":  ["AI Disruption Analog"],
+}
+
 _STOPWORDS = {
     "A", "AN", "AND", "ARE", "BE", "BUY", "DO", "FOR", "HOLD", "I", "IF", "IN",
     "IS", "IT", "ME", "MY", "OF", "ON", "OR", "SELL", "SHOULD", "THE", "TO",
@@ -67,12 +87,19 @@ def _requires_deep_dive(user_query: str, scenarios: list[str]) -> bool:
     )
 
 
-def route_intent(user_query: str) -> IntentRouterResult:
+def route_intent(user_query: str, ticker: str | None = None) -> IntentRouterResult:
     """Deterministic Tier-2 classifier for query routing and stress scenarios."""
     query = user_query.strip()
     scenarios = _extract_scenarios(query)
+
+    # Auto-inject scenarios based on the ticker's known business exposure
+    if ticker:
+        for auto_scenario in _TICKER_SCENARIOS.get(ticker.upper(), []):
+            if auto_scenario not in scenarios:
+                scenarios.append(auto_scenario)
+
     return IntentRouterResult(
-        target_asset=_extract_ticker(query),
+        target_asset=_extract_ticker(query) or ticker,
         scenarios=scenarios,
         requires_deep_dive=_requires_deep_dive(query, scenarios),
     )

@@ -51,7 +51,7 @@ ALL_KNOWN_ETFS: set[str] = LONG_TERM_CORE_ETFS | GROWTH_ETFS | BOND_ETFS | INTL_
 #: Tickers commonly associated with the technology sector for concentration check
 TECH_TICKERS: set[str] = {
     "NVDA", "AAPL", "MSFT", "META", "GOOGL", "GOOG",
-    "AMZN", "TSLA", "AVGO", "AMD", "INTC", "QCOM",
+    "AMZN", "TSLA", "AVGO", "AMD", "INTC", "QCOM", "ACN",
     "QQQ", "QQQM", "XLK", "VGT", "SOXX", "SMH",
     "ARKK", "ARKG", "ARKW",
 }

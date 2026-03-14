@@ -34,7 +34,7 @@ const STEPS: Record<string, string[]> = {
   strategist: [
     "Analyzing portfolio concentration…",
     "Checking ETF overlap…",
-    "Computing Kelly position size…",
+    "Assessing sizing constraints…",
     "Mapping historical analogs…",
     "Finalizing allocation strategy…",
   ],

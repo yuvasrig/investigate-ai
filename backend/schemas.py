@@ -27,6 +27,15 @@ def _coerce_money_like_number(value):
     return value
 
 
+def _analog_dedupe_key(value: str) -> str:
+    normalized = value.lower()
+    normalized = normalized.replace("→", " ")
+    normalized = re.sub(r"\(\d{4}\)", "", normalized)
+    normalized = re.sub(r"\b\d{4}\b", "", normalized)
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Verified Claim & Agent output schemas
 # ══════════════════════════════════════════════════════════════════════════════
@@ -146,7 +155,42 @@ class EvidenceAssessment(BaseModel):
 
 class EvaluatedScenario(BaseModel):
     scenario_name: str = Field(description="Name of the scenario evaluated (from Intent Router)")
-    verified_analog_used: str = Field(description="Historical event or comparable used from RAG to justify the scenario outcome")
+    verified_analogs_used: list[str] = Field(
+        default_factory=list,
+        description="Historical events or comparables used from RAG to justify the scenario outcome",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_analogs(cls, data):
+        if not isinstance(data, dict):
+            return data
+
+        analogs = data.get("verified_analogs_used")
+        legacy_analog = data.get("verified_analog_used")
+
+        if isinstance(analogs, str):
+            analogs = [analogs]
+        elif analogs is None:
+            analogs = []
+        elif not isinstance(analogs, list):
+            analogs = [str(analogs)]
+
+        if legacy_analog:
+            analogs = [legacy_analog, *analogs]
+
+        seen: set[str] = set()
+        normalized = []
+        for analog in analogs:
+            text = str(analog).strip()
+            key = _analog_dedupe_key(text)
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            normalized.append(text)
+
+        data["verified_analogs_used"] = normalized
+        return data
 
 class JudgeRecommendation(BaseModel):
     action: str = Field(description="Investment action: buy, hold, or sell")
@@ -194,6 +238,16 @@ class IntentRouterResult(BaseModel):
     requires_deep_dive: bool = Field(description="True if the user intent requires the 4-agent deep dive, false if it's just general info")
 
 
+class SecFiling(BaseModel):
+    cik: str
+    ticker: str
+    accession_number: str
+    filing_date: str
+    filing_url: str
+    viewer_url: str
+    section_urls: dict
+
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Portfolio / request schemas
@@ -221,7 +275,7 @@ class AnalysisRequest(BaseModel):
     )
     portfolio_holdings: Optional[list[PortfolioHolding]] = Field(
         default=None,
-        description="Individual ETF/stock holdings for hidden-exposure and Kelly analysis"
+        description="Individual ETF/stock holdings for hidden-exposure analysis"
     )
 
 
@@ -251,15 +305,17 @@ class AnalysisResponse(BaseModel):
     analysis_id: str
     llm_provider: str
     ticker: str
+    user_query: Optional[str] = None
     bull_analysis: BullAnalysis
     bear_analysis: BearAnalysis
     strategist_analysis: StrategistAnalysis
     final_recommendation: JudgeRecommendation
+    intent: Optional[IntentRouterResult] = None
     market_data: Optional[dict] = None
     rag_summary: Optional[dict] = None
     traffic_light: Optional[TrafficLightResult] = None
     portfolio_exposure: Optional[dict] = None
-    kelly_sizing: Optional[KellySizingResult] = None   # NEW
+    sec_filing: Optional[SecFiling] = None
     execution_time: float
     timestamp: str
 

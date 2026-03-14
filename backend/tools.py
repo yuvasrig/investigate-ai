@@ -7,8 +7,11 @@ format_market_context(data)    → str   — LLM-ready formatted block
 
 import math
 import os
+import re
 from datetime import datetime
 from typing import Optional
+from urllib.parse import quote_plus
+import xml.etree.ElementTree as ET
 
 import requests
 import requests_cache
@@ -104,6 +107,116 @@ def _fmp_get(path: str) -> list | dict:
 def _fmp_first(path: str) -> dict:
     result = _fmp_get(path)
     return result[0] if isinstance(result, list) and result else {}
+
+
+def _slugify_company_name(company_name: str) -> str:
+    cleaned = (company_name or "").lower()
+    cleaned = cleaned.replace("&", " and ")
+    cleaned = re.sub(
+        r"\b(class [ab]|ordinary shares?|common stock|holdings?|group|company|co|corp|corporation|inc|plc|ltd|limited)\b",
+        " ",
+        cleaned,
+    )
+    cleaned = re.sub(r"[^a-z0-9]+", "-", cleaned)
+    cleaned = re.sub(r"-{2,}", "-", cleaned).strip("-")
+    return cleaned
+
+
+def _fetch_companiesmarketcap_trailing_pe(company_name: str | None) -> float | None:
+    """
+    Best-effort trailing P/E fallback from CompaniesMarketCap.
+    This avoids Yahoo's crumb flow and works without an API key.
+    """
+    slug = _slugify_company_name(company_name or "")
+    if not slug:
+        return None
+
+    try:
+        url = f"https://companiesmarketcap.com/{slug}/pe-ratio/"
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        if not resp.ok:
+            return None
+        match = re.search(r"P/E ratio of <strong>([^<]+)</strong>", resp.text, re.I)
+        if not match:
+            return None
+        return float(match.group(1).replace(",", "").strip())
+    except Exception:
+        return None
+
+
+def _fetch_google_news(ticker: str, company_name: str | None = None, limit: int = 5) -> list[dict]:
+    """
+    Fetch a small headline set from Google News RSS without requiring an API key.
+    This is a resilient fallback when Yahoo/FMP news is empty or unavailable.
+    """
+    queries = [f"{ticker} stock"]
+    if company_name:
+        queries.append(f"\"{company_name}\" stock")
+
+    seen_titles: set[str] = set()
+    items: list[dict] = []
+
+    for query in queries:
+        if len(items) >= limit:
+            break
+        try:
+            url = (
+                "https://news.google.com/rss/search"
+                f"?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
+            )
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            root = ET.fromstring(resp.text)
+            for item in root.findall("./channel/item"):
+                title = (item.findtext("title") or "").strip()
+                link = (item.findtext("link") or "").strip()
+                publisher = ""
+                source_el = item.find("source")
+                if source_el is not None and source_el.text:
+                    publisher = source_el.text.strip()
+                if not title or title in seen_titles:
+                    continue
+                seen_titles.add(title)
+                items.append({
+                    "title": title,
+                    "publisher": publisher,
+                    "link": link,
+                })
+                if len(items) >= limit:
+                    break
+        except Exception:
+            continue
+
+    return items
+
+
+def _fetch_yfinance_news(ticker: str, limit: int = 5) -> list[dict]:
+    """
+    Fetch a small recent-news set from yfinance even when FMP is the primary
+    market-data source. This keeps RAG news ingestion active for FMP-backed runs.
+    """
+    try:
+        session = requests_cache.CachedSession("yfinance_cache", expire_after=3600)
+        stock = yf.Ticker(ticker, session=session)
+        raw_news = stock.news or []
+        return [
+            {
+                "title": item.get("title", ""),
+                "publisher": item.get("publisher", ""),
+                "link": item.get("link", ""),
+            }
+            for item in raw_news[:limit]
+            if item.get("title")
+        ]
+    except Exception:
+        return []
+
+
+def _fetch_recent_news(ticker: str, company_name: str | None = None, limit: int = 5) -> list[dict]:
+    news = _fetch_yfinance_news(ticker, limit=limit)
+    if news:
+        return news
+    return _fetch_google_news(ticker, company_name=company_name, limit=limit)
 
 
 # ── Main data fetcher ─────────────────────────────────────────────────────────
@@ -231,8 +344,15 @@ def fetch_full_market_data(ticker: str) -> dict:
 
                     "quarterly_revenue": quarterly_revenue,
                     "quarterly_earnings": quarterly_earnings,
-                    "recent_news": [],
+                    "recent_news": _fetch_recent_news(
+                        ticker,
+                        company_name=profile.get("companyName") or quote.get("name"),
+                    ),
                 }
+                if data["pe_trailing"] is None:
+                    data["pe_trailing"] = _fetch_companiesmarketcap_trailing_pe(
+                        profile.get("companyName") or quote.get("name")
+                    )
                 return data
 
         except Exception:
@@ -329,14 +449,14 @@ def fetch_full_market_data(ticker: str) -> dict:
         except Exception:
             pass
 
-        try:
-            raw_news = stock.news or []
-            data["recent_news"] = [
-                {"title": n.get("title", ""), "publisher": n.get("publisher", ""), "link": n.get("link", "")}
-                for n in raw_news[:5] if n.get("title")
-            ]
-        except Exception:
-            pass
+        data["recent_news"] = _fetch_recent_news(
+            ticker,
+            company_name=info.get("longName") or info.get("shortName"),
+        )
+        if data["pe_trailing"] is None:
+            data["pe_trailing"] = _fetch_companiesmarketcap_trailing_pe(
+                info.get("longName") or info.get("shortName")
+            )
 
         return data
 

@@ -14,6 +14,7 @@ Design:
 
 import os
 import time
+import hashlib
 from functools import lru_cache
 from pathlib import Path
 
@@ -98,12 +99,17 @@ def upsert_documents(ticker: str, documents: list[dict]) -> int:
     ids, texts, metadatas = [], [], []
     for i, doc in enumerate(documents):
         m = doc["metadata"]
-        uid = (
-            f"{ticker}_{m['source']}_"
-            f"{m.get('form', m.get('fiscal_year', 'x'))}_"
-            f"{m.get('section', 'x')}_"
-            f"{m.get('chunk_index', i)}"
-        )
+        if m["source"] == "news":
+            article_key = m.get("url") or m.get("title") or f"news_{i}"
+            article_hash = hashlib.sha1(article_key.encode("utf-8")).hexdigest()[:12]
+            uid = f"{ticker}_news_{article_hash}_{m.get('chunk_index', i)}"
+        else:
+            uid = (
+                f"{ticker}_{m['source']}_"
+                f"{m.get('form', m.get('fiscal_year', 'x'))}_"
+                f"{m.get('section', 'x')}_"
+                f"{m.get('chunk_index', i)}"
+            )
         ids.append(uid)
         texts.append(doc["text"])
         metadatas.append({**doc["metadata"], "ingested_at": now})
@@ -176,3 +182,16 @@ def collection_stats(ticker: str) -> dict:
         return {"total": total, "sources": sources}
     except Exception:
         return {"total": 0, "sources": {}}
+
+
+def source_metadatas(ticker: str, source: str, limit: int = 50) -> list[dict]:
+    """Return stored metadatas for a given source from a ticker collection."""
+    try:
+        col = _get_collection(ticker)
+        if col.count() == 0:
+            return []
+        docs = col.get(include=["metadatas"])
+        matches = [m for m in docs.get("metadatas", []) if m.get("source") == source]
+        return matches[:limit]
+    except Exception:
+        return []

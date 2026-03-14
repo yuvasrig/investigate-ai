@@ -130,8 +130,16 @@ DEMO_PORTFOLIO = {
             "cost_basis": 1700,
             "holding_period_days": 180,
         },
+        {
+            "ticker": "ACN",
+            "name": "Accenture plc",
+            "shares": 6,
+            "value": 2100,
+            "cost_basis": 1800,
+            "holding_period_days": 365,
+        },
     ],
-    "total_value": 80000,
+    "total_value": 82000,
     "cash": 4500,
     "last_updated": "2026-03-12",
     # Simulated monthly snapshots for growth chart (18 months back → today)
@@ -153,6 +161,6 @@ DEMO_PORTFOLIO = {
         {"month": "Nov 2025", "value": 78000},
         {"month": "Dec 2025", "value": 76500},
         {"month": "Jan 2026", "value": 79000},
-        {"month": "Feb 2026", "value": 80000},
+        {"month": "Feb 2026", "value": 82000},
     ],
 }

@@ -223,7 +223,7 @@ Output ONLY a JSON object with EXACTLY these top-level fields (no extra wrapper 
   "risk_management": "string",
   "traffic_light_color": "red" | "yellow" | "green",
   "evaluated_scenarios": [
-    {"scenario_name": "string", "verified_analog_used": "string"},
+    {"scenario_name": "string", "verified_analogs_used": ["string", "string"]},
     ...
   ],
   "key_factors": ["string", ...],
@@ -246,13 +246,88 @@ def _schema_hint(skeleton: str) -> str:
 
 # ── Market data helper ────────────────────────────────────────────────────────
 
+_MARKET_KEY_ALIASES = {
+    "forwardPE": ["pe_forward"],
+    "trailingPE": ["pe_trailing"],
+    "pegRatio": ["peg_ratio"],
+    "revenueGrowth": ["revenue_growth_yoy"],
+    "earningsGrowth": ["earnings_growth_yoy"],
+    "grossMargins": ["gross_margin"],
+    "operatingMargins": ["operating_margin"],
+    "profitMargins": ["net_profit_margin"],
+    "returnOnEquity": ["roe"],
+    "freeCashflow": ["free_cash_flow"],
+    "totalRevenue": ["revenue_ttm"],
+    "marketCap": ["market_cap"],
+    "fiftyTwoWeekHigh": ["52_week_high"],
+    "fiftyTwoWeekLow": ["52_week_low"],
+    "totalCash": ["total_cash"],
+    "totalDebt": ["total_debt"],
+    "debtToEquity": ["debt_to_equity"],
+    "enterpriseToRevenue": ["ev_to_revenue"],
+    "enterpriseToEbitda": ["ev_to_ebitda"],
+    "targetMeanPrice": ["analyst_mean_target"],
+    "targetMedianPrice": ["analyst_median_target"],
+    "targetHighPrice": ["analyst_high_target"],
+    "targetLowPrice": ["analyst_low_target"],
+    "numberOfAnalystOpinions": ["analyst_count"],
+    "recommendationKey": ["analyst_recommendation"],
+    "forwardEps": ["eps_forward"],
+    "trailingEps": ["eps_trailing"],
+    "shortPercentOfFloat": ["short_percent_float"],
+}
+
+
+def _camel_to_snake(name: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
 def _md(market_data: dict, *keys, default=0):
     """Try multiple key names; return first non-None value or default."""
     for k in keys:
-        v = market_data.get(k)
-        if v is not None:
-            return v
+        candidates = [k]
+        candidates.extend(_MARKET_KEY_ALIASES.get(k, []))
+        snake = _camel_to_snake(k)
+        if snake not in candidates:
+            candidates.append(snake)
+        for candidate in candidates:
+            v = market_data.get(candidate)
+            if v is not None:
+                return v
     return default
+
+
+def _scale(value, multiplier: float):
+    return None if value is None else value * multiplier
+
+
+def _div(value, divisor: float):
+    return None if value is None else value / divisor
+
+
+def _fmt_money(value, decimals: int = 2) -> str:
+    return "N/A" if value is None else f"${value:,.{decimals}f}"
+
+
+def _fmt_billions(value) -> str:
+    return "N/A" if value is None else f"${value / 1e9:.1f}B"
+
+
+def _fmt_ratio(value, decimals: int = 2, suffix: str = "x") -> str:
+    return "N/A" if value is None else f"{value:.{decimals}f}{suffix}"
+
+
+def _fmt_pct(value, decimals: int = 1, signed: bool = False) -> str:
+    if value is None:
+        return "N/A"
+    sign = "+" if signed else ""
+    return f"{value:{sign}.{decimals}f}%"
+
+
+def _fmt_range(low, high, decimals: int = 2) -> str:
+    if low is None or high is None:
+        return "N/A"
+    return f"${low:,.{decimals}f} – ${high:,.{decimals}f}"
 
 
 # ── Peer formatter ────────────────────────────────────────────────────────────
@@ -302,34 +377,38 @@ def run_bull_agent(
     peers_text   = _format_peers(peer_data)
     earnings_txt = fetch_earnings_highlights(ticker, market_data)
 
-    price        = _md(market_data, "currentPrice", "current_price")
-    fwd_pe       = _md(market_data, "forwardPE",    "forward_pe")
-    trailing_pe  = _md(market_data, "trailingPE",   "trailing_pe")
-    peg          = _md(market_data, "pegRatio")
-    rev_growth   = _md(market_data, "revenueGrowth")  * 100
-    earn_growth  = _md(market_data, "earningsGrowth") * 100
-    gross_m      = _md(market_data, "grossMargins")    * 100
-    op_m         = _md(market_data, "operatingMargins")* 100
-    net_m        = _md(market_data, "profitMargins")   * 100
-    roe          = _md(market_data, "returnOnEquity")  * 100
-    fcf_b        = _md(market_data, "freeCashflow") / 1e9
-    rev_b        = _md(market_data, "totalRevenue") / 1e9
-    cap_b        = _md(market_data, "marketCap") / 1e9
+    price        = _md(market_data, "currentPrice", "current_price", default=None)
+    fwd_pe       = _md(market_data, "forwardPE",    "forward_pe", default=None)
+    trailing_pe  = _md(market_data, "trailingPE",   "trailing_pe", default=None)
+    peg          = _md(market_data, "pegRatio", default=None)
+    rev_growth   = _scale(_md(market_data, "revenueGrowth", default=None), 100)
+    earn_growth  = _scale(_md(market_data, "earningsGrowth", default=None), 100)
+    gross_m      = _scale(_md(market_data, "grossMargins", default=None), 100)
+    op_m         = _scale(_md(market_data, "operatingMargins", default=None), 100)
+    net_m        = _scale(_md(market_data, "profitMargins", default=None), 100)
+    roe          = _scale(_md(market_data, "returnOnEquity", default=None), 100)
+    fcf          = _md(market_data, "freeCashflow", default=None)
+    rev_ttm      = _md(market_data, "totalRevenue", default=None)
+    cap          = _md(market_data, "marketCap", default=None)
     beta         = _md(market_data, "beta", default=1.0)
-    hi52         = _md(market_data, "fiftyTwoWeekHigh")
-    lo52         = _md(market_data, "fiftyTwoWeekLow")
-    cash_b       = _md(market_data, "totalCash") / 1e9
-    debt_b       = _md(market_data, "totalDebt") / 1e9
-    debt_eq      = _md(market_data, "debtToEquity")
-    ev_rev       = _md(market_data, "enterpriseToRevenue")
-    ev_ebitda    = _md(market_data, "enterpriseToEbitda")
-    tgt_mean     = _md(market_data, "targetMeanPrice")
-    tgt_hi       = _md(market_data, "targetHighPrice")
-    tgt_lo       = _md(market_data, "targetLowPrice")
-    n_analysts   = int(_md(market_data, "numberOfAnalystOpinions"))
+    hi52         = _md(market_data, "fiftyTwoWeekHigh", default=None)
+    lo52         = _md(market_data, "fiftyTwoWeekLow", default=None)
+    cash         = _md(market_data, "totalCash", default=None)
+    debt         = _md(market_data, "totalDebt", default=None)
+    debt_eq      = _md(market_data, "debtToEquity", default=None)
+    ev_rev       = _md(market_data, "enterpriseToRevenue", default=None)
+    ev_ebitda    = _md(market_data, "enterpriseToEbitda", default=None)
+    tgt_mean     = _md(market_data, "targetMeanPrice", default=None)
+    tgt_hi       = _md(market_data, "targetHighPrice", default=None)
+    tgt_lo       = _md(market_data, "targetLowPrice", default=None)
+    n_analysts   = int(_md(market_data, "numberOfAnalystOpinions", default=0))
     rec_key      = (market_data.get("recommendationKey") or "N/A").upper()
-    fwd_eps      = _md(market_data, "forwardEps")
+    fwd_eps      = _md(market_data, "forwardEps", default=None)
     proposed_pct = (amount / portfolio_value * 100) if portfolio_value > 0 else 0
+    valuation_missing_note = (
+        "Note: if valuation fields show N/A, that reflects vendor-side data availability limits. "
+        "Do not treat missing ratios alone as evidence of overvaluation or deterioration."
+    )
 
     # ── Action-specific framing ───────────────────────────────────────────────
     if analysis_action == "sell":
@@ -359,25 +438,26 @@ Your investment memos have generated $2B+ in alpha over 10 years.
 
 ━━━ LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VALUATION:
-• Current Price:      ${price:.2f}
-• Market Cap:         ${cap_b:.1f}B
-• Forward P/E:        {fwd_pe:.1f}x   |  Trailing P/E: {trailing_pe:.1f}x
-• PEG Ratio:          {peg:.2f}       |  EV/Revenue: {ev_rev:.2f}x  |  EV/EBITDA: {ev_ebitda:.2f}x
-• 52-week Range:      ${lo52:.2f} – ${hi52:.2f}
+• Current Price:      {_fmt_money(price)}
+• Market Cap:         {_fmt_billions(cap)}
+• Forward P/E:        {_fmt_ratio(fwd_pe, decimals=1)}   |  Trailing P/E: {_fmt_ratio(trailing_pe, decimals=1)}
+• PEG Ratio:          {_fmt_ratio(peg)}       |  EV/Revenue: {_fmt_ratio(ev_rev)}  |  EV/EBITDA: {_fmt_ratio(ev_ebitda)}
+• 52-week Range:      {_fmt_range(lo52, hi52)}
 
 GROWTH & PROFITABILITY:
-• Revenue (TTM):      ${rev_b:.1f}B   |  Rev Growth: {rev_growth:+.1f}% YoY
-• Earnings Growth:    {earn_growth:+.1f}% YoY
-• Gross Margin:       {gross_m:.1f}%  |  Operating Margin: {op_m:.1f}%  |  Net Margin: {net_m:.1f}%
-• ROE:                {roe:.1f}%      |  Beta: {beta:.2f}
+• Revenue (TTM):      {_fmt_billions(rev_ttm)}   |  Rev Growth: {_fmt_pct(rev_growth, signed=True)} YoY
+• Earnings Growth:    {_fmt_pct(earn_growth, signed=True)} YoY
+• Gross Margin:       {_fmt_pct(gross_m)}  |  Operating Margin: {_fmt_pct(op_m)}  |  Net Margin: {_fmt_pct(net_m)}
+• ROE:                {_fmt_pct(roe)}      |  Beta: {beta:.2f}
 
 BALANCE SHEET & CASH FLOW:
-• Free Cash Flow:     ${fcf_b:.1f}B TTM
-• Cash:               ${cash_b:.1f}B  |  Debt: ${debt_b:.1f}B  |  D/E: {debt_eq:.2f}
-• Forward EPS:        ${fwd_eps:.2f}
+• Free Cash Flow:     {_fmt_billions(fcf)} TTM
+• Cash:               {_fmt_billions(cash)}  |  Debt: {_fmt_billions(debt)}  |  D/E: {_fmt_ratio(debt_eq, decimals=2, suffix='')}
+• Forward EPS:        {_fmt_money(fwd_eps)}
 
 ANALYST CONSENSUS ({n_analysts} analysts):
-• Mean Target: ${tgt_mean:.2f}  |  Range: ${tgt_lo:.2f}–${tgt_hi:.2f}  |  Rating: {rec_key}
+• Mean Target: {_fmt_money(tgt_mean)}  |  Range: {_fmt_range(tgt_lo, tgt_hi)}  |  Rating: {rec_key}
+• {valuation_missing_note}
 
 ━━━ RECENT EARNINGS & GUIDANCE HIGHLIGHTS ━━━━━━━━━━━━━━━━
 {earnings_txt}
@@ -396,7 +476,7 @@ ANALYSIS REQUIREMENTS & CHAIN-OF-VERIFICATION (CoVe):
 1. Investment thesis (2-3 sentences: expected return, timeline, key catalyst).
 2. Revenue model & factors.
 3. Valuation justification.
-4. Specific price target derived from REAL current price (${price:.2f}).
+4. Specific price target derived from REAL current price ({_fmt_money(price)}).
 5. 3-5 key risks monitored.
 6. Conviction 0-10.
 7. SCENARIO EVALUATION: For any macro stress-test scenarios provided below, evaluate the asset utilizing historical analogs from the RAG context.
@@ -436,16 +516,21 @@ def run_bear_agent(
     peers_text   = _format_peers(peer_data)
     comp_threats = fetch_competitive_threats(ticker, market_data)
 
-    price        = _md(market_data, "currentPrice", "current_price")
-    fwd_pe       = _md(market_data, "forwardPE",    "forward_pe")
-    peg          = _md(market_data, "pegRatio")
-    rev_growth   = _md(market_data, "revenueGrowth")   * 100
-    gross_m      = _md(market_data, "grossMargins")     * 100
-    op_m         = _md(market_data, "operatingMargins") * 100
-    ev_rev       = _md(market_data, "enterpriseToRevenue")
-    short_pct    = _md(market_data, "shortPercentOfFloat") * 100
-    debt_b       = _md(market_data, "totalDebt") / 1e9
-    debt_eq      = _md(market_data, "debtToEquity")
+    price        = _md(market_data, "currentPrice", "current_price", default=None)
+    fwd_pe       = _md(market_data, "forwardPE",    "forward_pe", default=None)
+    trailing_pe  = _md(market_data, "trailingPE",   "trailing_pe", default=None)
+    peg          = _md(market_data, "pegRatio", default=None)
+    rev_growth   = _scale(_md(market_data, "revenueGrowth", default=None), 100)
+    gross_m      = _scale(_md(market_data, "grossMargins", default=None), 100)
+    op_m         = _scale(_md(market_data, "operatingMargins", default=None), 100)
+    ev_rev       = _md(market_data, "enterpriseToRevenue", default=None)
+    short_pct    = _scale(_md(market_data, "shortPercentOfFloat", default=None), 100)
+    debt         = _md(market_data, "totalDebt", default=None)
+    debt_eq      = _md(market_data, "debtToEquity", default=None)
+    valuation_missing_note = (
+        "If valuation fields show N/A, that indicates upstream data-provider gaps. "
+        "Do not use missing ratios alone as proof the stock is overvalued."
+    )
 
     hist_text = (
         f"5Y High: ${hist.get('high_5y',0):.2f}  |  5Y Low: ${hist.get('low_5y',0):.2f}  |  "
@@ -481,13 +566,15 @@ Your job: Find flaws in the bull thesis. Be the voice of rigorous, evidence-base
 {action_header}
 
 ━━━ LIVE MARKET DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Current Price:      ${price:.2f}
-• Forward P/E:        {fwd_pe:.1f}x   |  PEG Ratio: {peg:.2f}
-• Revenue Growth:     {rev_growth:+.1f}% YoY  (sustainable or cyclical peak?)
-• Gross Margin:       {gross_m:.1f}%   |  Operating Margin: {op_m:.1f}%  (at cyclical peak?)
-• EV/Revenue:         {ev_rev:.2f}x    (stretched vs peers?)
-• Short Interest:     {short_pct:.1f}% of float
-• Total Debt:         ${debt_b:.1f}B   |  D/E: {debt_eq:.2f}
+• Current Price:      {_fmt_money(price)}
+• Forward P/E:        {_fmt_ratio(fwd_pe, decimals=1)}   |  Trailing P/E: {_fmt_ratio(trailing_pe, decimals=1)}
+• PEG Ratio:          {_fmt_ratio(peg)}
+• Revenue Growth:     {_fmt_pct(rev_growth, signed=True)} YoY  (sustainable or cyclical peak?)
+• Gross Margin:       {_fmt_pct(gross_m)}   |  Operating Margin: {_fmt_pct(op_m)}  (at cyclical peak?)
+• EV/Revenue:         {_fmt_ratio(ev_rev)}    (stretched vs peers?)
+• Short Interest:     {_fmt_pct(short_pct)}
+• Total Debt:         {_fmt_billions(debt)}   |  D/E: {_fmt_ratio(debt_eq, decimals=2, suffix='')}
+• {valuation_missing_note}
 
 ━━━ HISTORICAL CONTEXT (5-Year) ━━━━━━━━━━━━━━━━━━━━━━━━━
 {hist_text}
@@ -514,6 +601,7 @@ ANALYSIS REQUIREMENTS & CHAIN-OF-VERIFICATION (CoVe):
 6. SCENARIO EVALUATION: For any macro stress-test scenarios provided below, evaluate the asset utilizing historical analogs from the RAG context (e.g., 2008 GFC, 1970s stagflation). 
 7. CHAIN-OF-VERIFICATION: You MUST verify every numerical claim against the LIVE MARKET DATA or SEC FILINGS (RAG) sections. Unverified claims MUST be flagged as `is_speculative: true` in your JSON output.
 8. SEC CITATIONS: When a claim is directly sourced from the SEC 10-K grounding block above, set `sec_section` to the matching item: "Item 1 - Business", "Item 1A - Risk Factors", "Item 7 - MD&A", or "Item 8 - Financial Statements". Set null if not from the SEC filing.
+9. VALUATION DISCIPLINE: If Forward P/E, Trailing P/E, PEG, and EV/Revenue are unavailable or shown as N/A in LIVE MARKET DATA, you MUST NOT argue that the stock is overvalued because of missing valuation metrics. If Trailing P/E is available, you may use it concretely. Otherwise omit valuation criticism and focus on concrete business, macro, competitive, or portfolio risks instead.
 
 STRESS-TEST SCENARIOS TO EVALUATE:
 {scenario_text}
@@ -785,11 +873,6 @@ Weighted Score = (Analyst_Conviction × Analyst_Total_Evidence_Score) / 40
 Example: 87 conviction × (35/40 evidence) = 76.1 weighted score.
 Populate the `evidence_assessment` fields with these scores. The recommendation must heavily weight the analyst with the highest weighted score.
 Please output the evaluated scenarios and explicitly state what verified historical analog was used to score them.
-
-POSITION SIZING (Modified Kelly):
-• Bull conv >80, Bear conv <60 + low correlation   → 100% of planned size
-• Bull conv 70-80, Bear conv 60-70 + med correlation → 60-75% of size
-• Mixed/high correlation                             → 30-50% or reduce to strategist cap
 
 HARD CONSTRAINTS (must not violate):
 • recommended_amount ≤ strategist's recommended_allocation

@@ -25,10 +25,11 @@ from typing import TypedDict, Optional, Any, Callable, TypeVar
 
 from langgraph.graph import StateGraph, END
 
-from schemas import BullAnalysis, BearAnalysis, StrategistAnalysis, JudgeRecommendation
+from schemas import BullAnalysis, BearAnalysis, StrategistAnalysis, JudgeRecommendation, EvaluatedScenario
 from agents import run_bull_agent, run_bear_agent, run_strategist_agent, run_judge_agent
 from tools import fetch_full_market_data
 from rag.retriever import ingest_ticker, retrieve_all_agents
+from rag.historical_analogs import get_fallback_evaluated_scenarios
 
 T = TypeVar("T")
 
@@ -43,6 +44,8 @@ class InvestmentState(TypedDict):
     risk_tolerance: str
     time_horizon: str
     analysis_action: str  # "buy" | "sell" | "hold"
+    user_query: Optional[str]
+    scenarios: Optional[list]   # scenario labels from intent router
 
     # Live market snapshot (populated by fetch_data node)
     market_data: Optional[dict]
@@ -86,7 +89,7 @@ def rag_node(state: InvestmentState) -> dict[str, Any]:
     market_data = state["market_data"] or {}
 
     rag_summary = ingest_ticker(ticker, market_data)
-    rag_context = retrieve_all_agents(ticker)
+    rag_context = retrieve_all_agents(ticker, scenarios=state.get("scenarios") or [])
 
     return {"rag_context": rag_context, "rag_summary": rag_summary}
 
@@ -135,6 +138,51 @@ def _run_with_retry(
         f"{name} failed after {max_retries} attempts: {last_exc}"
     ) from last_exc
 
+
+def _ensure_evaluated_scenarios(
+    recommendation: JudgeRecommendation,
+    scenarios: list[str],
+) -> JudgeRecommendation:
+    """Guarantee scenario→analog pairs exist whenever scenarios were detected."""
+    if not scenarios:
+        return recommendation
+
+    existing = recommendation.evaluated_scenarios or []
+    fallback_items = [
+        EvaluatedScenario.model_validate(item)
+        for item in get_fallback_evaluated_scenarios(scenarios)
+    ]
+
+    if existing or fallback_items:
+        merged: dict[str, EvaluatedScenario] = {
+            item.scenario_name: item for item in existing
+        }
+        ordered_names = [item.scenario_name for item in existing]
+
+        for fallback in fallback_items:
+            current = merged.get(fallback.scenario_name)
+            if current is None:
+                merged[fallback.scenario_name] = fallback
+                ordered_names.append(fallback.scenario_name)
+                continue
+
+            merged_analogs: list[str] = []
+            seen: set[str] = set()
+            for analog in [*current.verified_analogs_used, *fallback.verified_analogs_used]:
+                if analog in seen:
+                    continue
+                seen.add(analog)
+                merged_analogs.append(analog)
+
+            merged[fallback.scenario_name] = current.model_copy(
+                update={"verified_analogs_used": merged_analogs}
+            )
+
+        return recommendation.model_copy(
+            update={"evaluated_scenarios": [merged[name] for name in ordered_names]}
+        )
+    return recommendation
+
 def bull_node(state: InvestmentState) -> dict[str, Any]:
     ticker = state["ticker"]
     amount = state["amount"]
@@ -153,6 +201,7 @@ def bull_node(state: InvestmentState) -> dict[str, Any]:
         amount,
         portfolio_value,
         analysis_action,
+        state.get("scenarios") or [],
     )
     return {"bull_analysis": bull}
 
@@ -174,6 +223,7 @@ def bear_node(state: InvestmentState) -> dict[str, Any]:
         amount,
         portfolio_value,
         analysis_action,
+        state.get("scenarios") or [],
     )
     return {"bear_analysis": bear}
 
@@ -192,6 +242,7 @@ def strategist_node(state: InvestmentState) -> dict[str, Any]:
         run_strategist_agent,
         ticker, amount, portfolio_value, risk_tolerance,
         market_data, rag.get("strategist", ""), None, analysis_action,
+        state.get("scenarios") or [],
     )
     return {"strategist_analysis": strategist}
 
@@ -287,7 +338,12 @@ def judge_node(state: InvestmentState) -> dict[str, Any]:
         state["market_data"] or {},
         rag.get("judge", ""),
         state.get("analysis_action", "buy"),
+        state.get("scenarios") or [],
         max_retries=_JUDGE_MAX_RETRIES,
+    )
+    recommendation = _ensure_evaluated_scenarios(
+        recommendation,
+        state.get("scenarios") or [],
     )
     return {"final_recommendation": recommendation}
 
@@ -353,6 +409,8 @@ def run_analysis(
     risk_tolerance: str,
     time_horizon: str,
     analysis_action: str = "buy",
+    user_query: str | None = None,
+    scenarios: list | None = None,
 ) -> InvestmentState:
     """Execute the full grounded + RAG investment analysis workflow."""
     initial_state: InvestmentState = {
@@ -362,6 +420,8 @@ def run_analysis(
         "risk_tolerance": risk_tolerance,
         "time_horizon": time_horizon,
         "analysis_action": analysis_action,
+        "user_query": user_query,
+        "scenarios": scenarios or [],
         "market_data": None,
         "rag_context": None,
         "rag_summary": None,

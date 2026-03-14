@@ -301,6 +301,7 @@ def generate_pdf(analysis: dict) -> bytes:
     ticker   = _safe(analysis.get("ticker"))
     ts       = _safe(analysis.get("timestamp"))
     provider = _safe(analysis.get("llm_provider"))
+    user_q   = _safe(analysis.get("user_query"), f"Analysis request for {ticker}")
     exec_t   = analysis.get("execution_time")
     market   = analysis.get("market_data") or {}
 
@@ -357,6 +358,7 @@ def generate_pdf(analysis: dict) -> bytes:
     entry     = _safe(rec.get("entry_strategy"))
     risk_mgmt = _safe(rec.get("risk_management"))
 
+    pdf.kv("Question Asked", user_q)
     pdf.kv("Action",         action)
     pdf.kv("Amount",         amt)
     pdf.kv("Confidence",     f"{conf}%")

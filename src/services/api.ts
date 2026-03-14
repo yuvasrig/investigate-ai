@@ -95,7 +95,8 @@ export interface EvidenceAssessment {
 
 export interface EvaluatedScenario {
   scenario_name: string;
-  verified_analog_used: string;
+  verified_analogs_used: string[];
+  verified_analog_used?: string;
 }
 
 export interface IntentRouterResult {
@@ -169,23 +170,22 @@ export interface AnalysisResponse {
   analysis_id: string;
   llm_provider: string;
   ticker: string;
+  user_query?: string;
   bull_analysis: BullAnalysis;
   bear_analysis: BearAnalysis;
   strategist_analysis: StrategistAnalysis;
   final_recommendation: JudgeRecommendation;
   intent: IntentRouterResult | null;
   market_data: Record<string, unknown> | null;
-  rag_summary: { sec: number; news: number; cache_hit: boolean } | null;
+  rag_summary: {
+    sec?: number;
+    news?: number;
+    sec_docs?: number;
+    news_docs?: number;
+    cache_hit: boolean;
+  } | null;
   traffic_light: TrafficLightResult | null;
   portfolio_exposure: ExposureData | null;
-  kelly_sizing?: {
-    kelly_fraction: number;
-    raw_kelly_amount: number;
-    correlation_adjusted_amount: number;
-    final_amount: number;
-    sizing_rationale: string;
-    scale_factor: number;
-  } | null;
   sec_filing?: SecFiling | null;
   execution_time: number;
   timestamp: string;

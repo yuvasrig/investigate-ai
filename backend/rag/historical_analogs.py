@@ -574,6 +574,199 @@ ANALOG_DOCUMENTS: list[dict] = [
             "chunk_index": 19,
         },
     },
+    # ── Additional analog depth for thin scenario buckets ────────────────────
+    {
+        "text": (
+            "China internet platform crackdown (2020–2022) — Regulatory overhang with durable "
+            "multiple compression: In November 2020, Chinese regulators halted Ant Group's $37B IPO "
+            "and launched a broader antitrust/data-security campaign across internet platforms. "
+            "Alibaba (BABA) fell from ~$319 (Oct 2020) to ~$73 (Oct 2022) — a 77% drawdown. "
+            "Tencent, Meituan, and JD.com each saw 40–70% peak-to-trough declines over the same period. "
+            "Operational impact was real but smaller than the stock move: revenue growth decelerated, "
+            "margins compressed modestly, and fines/compliance costs increased, yet the underlying "
+            "businesses remained intact. "
+            "Key lesson: regulatory uncertainty can sustain 30–50% multiple compression for 18–30 months "
+            "even when the core franchise survives. "
+            "For AI/platform regulation, the market can price the policy risk far more aggressively "
+            "than the eventual earnings impact."
+        ),
+        "metadata": {
+            "source": "historical_analog",
+            "scenario": "Regulatory Crackdown Analog",
+            "title": "China Internet Crackdown (2020–2022) — Platform Regulation Analog",
+            "ticker": ANALOGS_TICKER,
+            "chunk_index": 20,
+        },
+    },
+    {
+        "text": (
+            "Nifty Fifty de-rating (1973–1974) — Valuation compression without business collapse: "
+            "The Nifty Fifty were elite US growth companies (Coca-Cola, Polaroid, McDonald's, Disney, IBM) "
+            "that traded at 40–90x earnings in the early 1970s under the belief they were 'one-decision' stocks. "
+            "During the 1973–1974 bear market, many fell 50–80% despite remaining fundamentally strong businesses. "
+            "Polaroid fell ~91%, Avon ~86%, McDonald's ~71%, Disney ~82%, and Xerox ~71%. "
+            "The primary driver was P/E compression as inflation, rates, and recession undermined the 'quality at any price' thesis. "
+            "Key lesson: even high-quality category leaders can suffer 50%+ drawdowns when starting multiples are extreme. "
+            "Recovery often takes years because earnings must catch up to prior expectations rather than simply reverting on sentiment."
+        ),
+        "metadata": {
+            "source": "historical_analog",
+            "scenario": "Valuation Compression Analog",
+            "title": "Nifty Fifty De-Rating (1973–1974)",
+            "ticker": ANALOGS_TICKER,
+            "chunk_index": 21,
+        },
+    },
+    {
+        "text": (
+            "SaaS multiple compression (2021–2022) — Modern duration unwind analog: "
+            "As inflation surged and the Fed raised rates from 0% to 4%+, long-duration software multiples reset sharply. "
+            "The BVP Cloud Index fell roughly 50% in 2022. "
+            "Zoom fell ~86% from 2020 highs to late-2022 lows; Shopify fell ~80%; "
+            "Cloudflare and Twilio each fell more than 70%. "
+            "Importantly, many companies still posted double-digit revenue growth, but valuation "
+            "compressed because discount rates rose and growth durability came into question. "
+            "Key lesson: modern growth equities can lose 50–80% on multiple compression alone, "
+            "even before earnings collapse, when the market reprices the value of distant cash flows."
+        ),
+        "metadata": {
+            "source": "historical_analog",
+            "scenario": "Valuation Compression Analog",
+            "title": "SaaS Multiple Compression (2021–2022)",
+            "ticker": ANALOGS_TICKER,
+            "chunk_index": 22,
+        },
+    },
+    {
+        "text": (
+            "1994 Fed tightening / bond massacre — Rates shock analog for duration-sensitive assets: "
+            "In 1994, the Federal Reserve raised the Fed Funds rate from 3.0% to 6.0% in 12 months. "
+            "US Treasury bonds suffered one of the worst modern drawdowns; the 10-year Treasury lost roughly 9% "
+            "and leveraged fixed-income strategies were hit much harder. "
+            "Mortgage REITs, rate-sensitive financials, and capital-intensive cyclicals underperformed sharply. "
+            "The episode showed how quickly markets can reprice when policy shifts faster than consensus expects. "
+            "Key lesson: sudden rate shocks compress valuation multiples of duration-heavy assets first, "
+            "with fundamentals deteriorating only later if financing conditions remain tight."
+        ),
+        "metadata": {
+            "source": "historical_analog",
+            "scenario": "Rates Shock / Stagflation Analog",
+            "title": "1994 Fed Tightening / Bond Massacre",
+            "ticker": ANALOGS_TICKER,
+            "chunk_index": 23,
+        },
+    },
+    {
+        "text": (
+            "2022 zero-rate unwind — High-duration equity repricing analog: "
+            "From January to October 2022, the US 10-year Treasury yield rose from ~1.5% to ~4.2% "
+            "as inflation stayed elevated and the Fed tightened rapidly. "
+            "ARKK fell ~67% in 2022; the Nasdaq 100 fell ~33%; many unprofitable software and fintech names fell 60–85%. "
+            "The decline was driven more by discount-rate repricing than by immediate revenue collapse. "
+            "Key lesson: when rates normalize abruptly from near-zero, high-PE and long-duration equities "
+            "can re-rate downward by 40–70% even if the business remains operationally healthy."
+        ),
+        "metadata": {
+            "source": "historical_analog",
+            "scenario": "Rates Shock / Stagflation Analog",
+            "title": "2022 Zero-Rate Unwind — Duration Shock Analog",
+            "ticker": ANALOGS_TICKER,
+            "chunk_index": 24,
+        },
+    },
+    {
+        "text": (
+            "COVID recession / consulting freeze (2020) — Services demand air pocket analog: "
+            "In Q2 2020, companies globally froze discretionary projects as pandemic uncertainty spiked. "
+            "Enterprise consulting, systems integration, travel, and transformation budgets were delayed or canceled. "
+            "Accenture's quarterly new bookings and consulting revenue slowed materially in early pandemic quarters, "
+            "while project-based service providers saw elongated sales cycles and reduced utilization. "
+            "Recovery was relatively fast for firms tied to digital transformation, but the initial shock showed that "
+            "discretionary services can experience a near-immediate demand air pocket in recession-like uncertainty. "
+            "Key lesson: consulting and project revenue can compress much faster than recurring software revenue when CIOs pause spend."
+        ),
+        "metadata": {
+            "source": "historical_analog",
+            "scenario": "Demand Slowdown / Recession Analog",
+            "title": "COVID Consulting Freeze (2020) — Discretionary Services Slowdown",
+            "ticker": ANALOGS_TICKER,
+            "chunk_index": 25,
+        },
+    },
+    {
+        "text": (
+            "2000–2002 telecom capex bust — Recessionary enterprise spending collapse analog: "
+            "After the telecom and internet buildout peak, carriers and enterprises slashed network and IT capital spending. "
+            "Lucent, Nortel, JDS Uniphase, and Cisco all suffered severe order declines; "
+            "many telecom equipment names fell 70–95% from peak. "
+            "The downturn was amplified by excess capacity, but the broader lesson remains: "
+            "when business customers cut growth capex simultaneously, suppliers to discretionary enterprise spending "
+            "see both revenue declines and brutal inventory/order resets. "
+            "Key lesson: enterprise spending slowdowns often show up first in bookings, utilization, and guidance cuts before revenue fully rolls over."
+        ),
+        "metadata": {
+            "source": "historical_analog",
+            "scenario": "Demand Slowdown / Recession Analog",
+            "title": "Telecom Capex Bust (2000–2002) — Enterprise Spending Reset",
+            "ticker": ANALOGS_TICKER,
+            "chunk_index": 26,
+        },
+    },
+    {
+        "text": (
+            "Suez Canal blockage (2021) — Logistics bottleneck and inventory-delay analog: "
+            "In March 2021, the Ever Given container ship blocked the Suez Canal for 6 days, "
+            "disrupting roughly 12% of global trade and delaying hundreds of vessels. "
+            "The backlog took weeks to unwind, and downstream effects compounded existing freight congestion. "
+            "Manufacturers and retailers with lean inventory planning faced shipment delays, missed delivery windows, "
+            "and rising spot freight costs. "
+            "Key lesson: even a short-lived physical chokepoint disruption can create multi-week inventory and logistics stress, "
+            "especially for companies relying on tightly sequenced global supply chains and low buffer stock."
+        ),
+        "metadata": {
+            "source": "historical_analog",
+            "scenario": "Supply Chain Shock Analog",
+            "title": "Suez Canal Blockage (2021) — Global Logistics Bottleneck",
+            "ticker": ANALOGS_TICKER,
+            "chunk_index": 27,
+        },
+    },
+    {
+        "text": (
+            "2007–2008 agricultural commodity spike — Input-cost inflation analog: "
+            "Global wheat, corn, rice, and soybean prices surged in 2007–2008 as biofuel demand, poor harvests, "
+            "and export restrictions tightened supply. "
+            "Food manufacturers, livestock producers, and restaurant operators saw margin pressure as input costs rose faster than pricing power. "
+            "Several consumer staples companies experienced temporary gross-margin compression until costs normalized or price increases stuck. "
+            "Key lesson: commodity shocks are not limited to energy; broad input inflation can pressure margins for 2–6 quarters "
+            "before pricing, hedging, or demand destruction restores equilibrium."
+        ),
+        "metadata": {
+            "source": "historical_analog",
+            "scenario": "Commodity Shock Analog",
+            "title": "Agricultural Commodity Spike (2007–2008)",
+            "ticker": ANALOGS_TICKER,
+            "chunk_index": 28,
+        },
+    },
+    {
+        "text": (
+            "Terra/Luna collapse (May 2022) — Stablecoin reflexivity and crypto drawdown analog: "
+            "In May 2022, the algorithmic stablecoin UST lost its peg and the associated Luna token collapsed to near zero within days. "
+            "The event erased roughly $40B in nominal market value and accelerated a broader crypto deleveraging cycle. "
+            "Bitcoin fell from about $39,000 to below $27,000 in less than two weeks, and credit stress spread to lenders and funds "
+            "such as Celsius, Three Arrows Capital, and Voyager over the following months. "
+            "Key lesson: crypto drawdowns often propagate through leverage, collateral chains, and confidence shocks, "
+            "causing sector-wide declines that exceed the initial trigger asset's direct market value."
+        ),
+        "metadata": {
+            "source": "historical_analog",
+            "scenario": "Crypto Volatility Analog",
+            "title": "Terra/Luna Collapse (May 2022) — Stablecoin Contagion",
+            "ticker": ANALOGS_TICKER,
+            "chunk_index": 29,
+        },
+    },
 ]
 
 # ── Seeding ───────────────────────────────────────────────────────────────────
@@ -600,7 +793,58 @@ def ensure_analogs_seeded() -> None:
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
-def retrieve_analogs(scenarios: list[str], n_results: int = 3) -> str:
+def get_analog_documents_for_scenarios(
+    scenarios: list[str],
+    max_per_scenario: int = 2,
+) -> list[dict]:
+    """
+    Deterministically select authored analog documents for the requested scenario tags.
+
+    This avoids depending solely on semantic search, which can under-return or mix
+    scenarios when the query is sparse. Order follows the provided scenarios.
+    """
+    if not scenarios:
+        return []
+
+    selected: list[dict] = []
+    seen_titles: set[str] = set()
+
+    for scenario in scenarios:
+        matches = [
+            doc for doc in ANALOG_DOCUMENTS
+            if doc["metadata"].get("scenario") == scenario
+        ][:max_per_scenario]
+        for doc in matches:
+            title = doc["metadata"].get("title", "")
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
+            selected.append(doc)
+
+    return selected
+
+
+def get_fallback_evaluated_scenarios(scenarios: list[str]) -> list[dict]:
+    """
+    Build a deterministic scenario→analog mapping for UI/report fallback when the
+    judge omits `evaluated_scenarios`.
+    """
+    fallback: list[dict] = []
+    for scenario in scenarios:
+        docs = get_analog_documents_for_scenarios([scenario], max_per_scenario=3)
+        if not docs:
+            continue
+        fallback.append({
+            "scenario_name": scenario,
+            "verified_analogs_used": [
+                doc["metadata"].get("title", "Historical Analog")
+                for doc in docs
+                if doc["metadata"].get("title")
+            ],
+        })
+    return fallback
+
+def retrieve_analogs(scenarios: list[str], n_results: int = 4) -> str:
     """
     Retrieve historical analog chunks matching the given scenario tags.
     Returns a formatted grounding block ready for injection into agent prompts.
@@ -611,11 +855,22 @@ def retrieve_analogs(scenarios: list[str], n_results: int = 3) -> str:
 
     ensure_analogs_seeded()
 
-    # Query with all scenario names combined for best semantic match
-    query = " ".join(scenarios)
-    results = store.similarity_search(ANALOGS_TICKER, query, n_results=n_results)
+    selected_docs = get_analog_documents_for_scenarios(scenarios, max_per_scenario=3)
+    results = [
+        {
+            "text": doc["text"],
+            "metadata": doc["metadata"],
+            "score": 1.0,
+        }
+        for doc in selected_docs[: max(n_results, len(selected_docs))]
+    ]
+
+    # Fall back to semantic search only if exact scenario matching found nothing.
     if not results:
-        return ""
+        query = " ".join(scenarios)
+        results = store.similarity_search(ANALOGS_TICKER, query, n_results=n_results)
+        if not results:
+            return ""
 
     lines = [
         "═══ HISTORICAL ANALOGS (Gated Grounding — RAG Verified) ═══",

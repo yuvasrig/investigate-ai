@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  TrendingUp, TrendingDown, Pause, Mic, MicOff,
+  TrendingUp, TrendingDown, Pause, Mic,
   ChevronRight, Loader2, Search, Bell, BarChart2, X, Zap, CircleHelp, ShieldAlert, Shield
 } from "lucide-react";
 import { motion } from "framer-motion";
@@ -10,6 +10,7 @@ import {
   AreaChart, Area, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { useAnalysis, type AnalysisAction } from "@/context/AnalysisContext";
+import { VoiceInput, type VoiceIntent } from "@/components/VoiceInput";
 import type { PortfolioReport } from "@/components/PortfolioReportCard";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:8000";
@@ -283,15 +284,12 @@ export default function Landing() {
   // Top search bar
   const [searchInput, setSearchInput] = useState("");
   const [showAgentRoles, setShowAgentRoles] = useState(false);
+  const [showVoiceInput, setShowVoiceInput] = useState(false);
 
   // Analysis params
   const [amount, setAmount] = useState("5000");
   const [riskTolerance, setRiskTolerance] = useState("moderate");
   const [timeHorizon, setTimeHorizon] = useState("1 year");
-
-  // Voice
-  const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   // Load portfolio + run Tier-1 analysis
   useEffect(() => {
@@ -346,28 +344,15 @@ export default function Landing() {
     navigate("/loading");
   };
 
-  const toggleVoice = () => {
-    if (listening) {
-      recognitionRef.current?.stop();
-      setListening(false);
-      return;
+  const handleVoiceIntent = (intent: VoiceIntent, transcript: string) => {
+    setSearchInput(transcript);
+    if (intent.amount > 0) {
+      setAmount(String(Math.round(intent.amount)));
     }
-    const SR =
-      (window as unknown as { SpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition ??
-      (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
-    if (!SR) return;
-    const rec = new SR();
-    rec.lang = "en-US";
-    rec.onresult = (e) => {
-      const text = e.results[0][0].transcript;
-      const a = text.match(/\$?([\d,]+)/);
-      setSearchInput(text);
-      if (a) setAmount(a[1].replace(/,/g, ""));
-    };
-    rec.onend = () => setListening(false);
-    recognitionRef.current = rec;
-    rec.start();
-    setListening(true);
+    if (intent.action === "buy" || intent.action === "sell" || intent.action === "hold") {
+      setSelectedAction(intent.action);
+    }
+    setShowVoiceInput(false);
   };
 
   // Totals
@@ -453,13 +438,18 @@ export default function Landing() {
                 className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none"
               />
               <button
-                onClick={toggleVoice}
-                className={`p-1.5 rounded-full transition-colors ${listening ? "text-red-500 bg-red-50" : "text-gray-400 hover:text-gray-700"}`}
+                onClick={() => setShowVoiceInput((current) => !current)}
+                className={`p-1.5 rounded-full transition-colors ${showVoiceInput ? "text-blue-600 bg-blue-50" : "text-gray-400 hover:text-gray-700"}`}
               >
-                {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                <Mic className="w-4 h-4" />
               </button>
             </div>
             <div className="p-4 space-y-4">
+              {showVoiceInput && (
+                <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
+                  <VoiceInput onIntent={handleVoiceIntent} />
+                </div>
+              )}
               {parsedSearchTicker && (
                 <div className="rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
                   Target asset: <span className="font-semibold tabular-nums">{parsedSearchTicker}</span>
@@ -796,5 +786,4 @@ function AnalysisParams({
     </div>
   );
 }
-
 

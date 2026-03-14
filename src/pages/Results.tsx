@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   TrendingUp, AlertTriangle, Target, Scale, CheckCircle2, AlertCircle,
   FileDown, Loader2, Info, FlaskConical, Trophy, ChevronDown, ChevronUp,
-  BookOpen, Database, ShieldCheck,
+  BookOpen, Database, ShieldCheck, ExternalLink,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAnalysis } from "@/context/AnalysisContext";
@@ -24,6 +24,12 @@ import type {
 } from "@/services/api";
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || "http://localhost:8000";
+
+interface MarketNewsItem {
+  title?: string;
+  publisher?: string;
+  link?: string;
+}
 
 const riskColor: Record<string, string> = {
   LOW: "text-bull bg-bull/10",
@@ -107,7 +113,7 @@ const AGENT_ROLES_TAB = [
 ] as const;
 
 // ── Historical analog context lookup ─────────────────────────────────────────
-// Keywords matched case-insensitively as substrings of verified_analog_used.
+// Keywords matched case-insensitively as substrings of an analog title.
 // All keywords in an entry must match (AND logic). First match wins.
 const ANALOG_CONTEXT_MAP: { keywords: string[]; context: string; category: string }[] = [
   {
@@ -269,6 +275,16 @@ function lookupAnalog(verifiedAnalogUsed: string): { context: string; category: 
   return null;
 }
 
+function getScenarioAnalogs(scenario: EvaluatedScenario): string[] {
+  const analogs = scenario.verified_analogs_used ?? [];
+  if (analogs.length > 0) return analogs;
+  return scenario.verified_analog_used ? [scenario.verified_analog_used] : [];
+}
+
+function countEvaluatedAnalogs(scenarios: EvaluatedScenario[]): number {
+  return scenarios.reduce((total, scenario) => total + getScenarioAnalogs(scenario).length, 0);
+}
+
 function categoryFromScenarioName(scenarioName: string): string {
   if (/ai disruption/i.test(scenarioName)) return "AI Disruption";
   if (/regulatory/i.test(scenarioName)) return "Regulatory";
@@ -347,11 +363,11 @@ function EnhancedStockHeader({
   const actionColor =
     actionUpper === "BUY"  ? "bg-bull text-white" :
     actionUpper === "SELL" ? "bg-bear text-white" :
-                             "bg-amber-500 text-white";
+                             "bg-blue-500 text-white";
 
   const pillColor =
     trafficLightColor === "green" ? "bg-emerald-100 text-emerald-700" :
-    trafficLightColor === "yellow" ? "bg-amber-100 text-amber-700" :
+    trafficLightColor === "yellow" ? "bg-secondary text-muted-foreground" :
     "bg-rose-100 text-rose-700";
 
   const changePositive = (regularMarketChange ?? 0) >= 0;
@@ -431,13 +447,21 @@ function MarketMetricsStrip({ marketData }: { marketData: Record<string, unknown
   if (!marketData) return null;
 
   const md = marketData;
-  const trailingPE = md.trailingPE as number | undefined;
-  const forwardPE  = md.forwardPE  as number | undefined;
-  const marketCap  = md.marketCap  as number | undefined;
-  const beta       = md.beta       as number | undefined;
-  const low52      = md.fiftyTwoWeekLow  as number | undefined;
-  const high52     = md.fiftyTwoWeekHigh as number | undefined;
-  const divYield   = md.dividendYield   as number | undefined;
+  const getNumber = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = md[key];
+      if (typeof value === "number") return value;
+    }
+    return undefined;
+  };
+
+  const trailingPE = getNumber("trailingPE", "pe_trailing");
+  const forwardPE  = getNumber("forwardPE", "pe_forward");
+  const marketCap  = getNumber("marketCap", "market_cap");
+  const beta       = getNumber("beta");
+  const low52      = getNumber("fiftyTwoWeekLow", "52_week_low");
+  const high52     = getNumber("fiftyTwoWeekHigh", "52_week_high");
+  const divYield   = getNumber("dividendYield", "dividend_yield");
 
   const formatCap = (v: number) => {
     if (v >= 1e12) return `$${(v / 1e12).toFixed(1)}T`;
@@ -472,134 +496,134 @@ function MarketMetricsStrip({ marketData }: { marketData: Record<string, unknown
   );
 }
 
-function KellySizingInline({ ks }: {
-  ks: {
-    kelly_fraction: number;
-    final_amount: number;
-    sizing_rationale: string;
-    scale_factor: number;
-  };
-}) {
-  return (
-    <div className="mt-4 p-4 rounded-xl border border-border bg-secondary/30">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-xs font-semibold text-foreground uppercase tracking-wider">Kelly Position Sizing</span>
-        <span className="text-[11px] bg-accent/10 text-accent px-2 py-0.5 rounded-full font-semibold">
-          {(ks.kelly_fraction * 100).toFixed(1)}% Kelly fraction
-        </span>
-      </div>
-      <div className="grid grid-cols-3 gap-3 mb-3">
-        <div className="text-center">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Suggested Amount</p>
-          <p className="text-base font-bold text-foreground tabular-nums">${ks.final_amount.toLocaleString()}</p>
-        </div>
-        <div className="text-center">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Kelly Fraction</p>
-          <p className="text-base font-bold text-foreground tabular-nums">{(ks.kelly_fraction * 100).toFixed(1)}%</p>
-        </div>
-        <div className="text-center">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Scale Factor</p>
-          <p className="text-base font-bold text-foreground tabular-nums">{ks.scale_factor.toFixed(2)}×</p>
-        </div>
-      </div>
-      {ks.sizing_rationale && (
-        <p className="text-xs text-muted-foreground leading-relaxed">{ks.sizing_rationale}</p>
-      )}
-    </div>
-  );
-}
-
 // ── Scenario Analysis Section ─────────────────────────────────────────────────
 
-function ScenarioCard({ scenario, index }: { scenario: EvaluatedScenario; index: number }) {
-  const analogInfo = lookupAnalog(scenario.verified_analog_used);
-  const category = analogInfo?.category ?? categoryFromScenarioName(scenario.scenario_name);
+function ScenarioDropdown({ scenario, index }: { scenario: EvaluatedScenario; index: number }) {
+  const [open, setOpen] = useState(index === 0);
+  const analogs = getScenarioAnalogs(scenario);
+  const analogContexts = analogs
+    .map((analog) => ({ analog, info: lookupAnalog(analog) }))
+    .filter((item) => item.info);
+  const category = analogContexts[0]?.info?.category ?? categoryFromScenarioName(scenario.scenario_name);
   const style = CATEGORY_STYLE[category] ?? CATEGORY_STYLE["default"];
 
   return (
-    <div className={`bg-card rounded-xl border border-border border-l-4 ${style.border} p-5 shadow-sm`}>
-      <div className="flex items-start justify-between gap-2 mb-3">
+    <div className={`bg-card rounded-xl border border-border border-l-4 ${style.border} shadow-sm`}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full p-5 text-left flex items-start justify-between gap-3"
+        aria-expanded={open}
+      >
         <div>
           <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mb-1">
-            Precedent {index + 1}
+            Scenario {index + 1}
           </p>
           <p className="text-sm font-semibold text-foreground leading-snug">{scenario.scenario_name}</p>
-        </div>
-        <span className={`shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full ${style.badge}`}>
-          {category}
-        </span>
-      </div>
-      <div className="p-3 bg-secondary/40 rounded-lg mb-3">
-        <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-1">Verified Analog Used</p>
-        <p className="text-xs text-foreground font-medium">{scenario.verified_analog_used}</p>
-      </div>
-      {analogInfo?.context && (
-        <p className="text-xs text-muted-foreground leading-relaxed">{analogInfo.context}</p>
-      )}
-    </div>
-  );
-}
-
-function ScenarioAnalysisSection({
-  evaluatedScenarios,
-  ragSummary,
-}: {
-  evaluatedScenarios: EvaluatedScenario[];
-  ragSummary: { sec: number; news: number; cache_hit: boolean } | null;
-}) {
-  return (
-    <section className="mb-12">
-      {/* Section header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-        <div>
-          <h3 className="text-2xl font-bold text-foreground">§2 — Scenario Analysis &amp; Historical Precedents</h3>
-          <p className="text-sm text-muted-foreground mt-1">
-            Historical analogs the AI consulted to stress-test and quantify scenario outcomes
+          <p className="text-xs text-muted-foreground mt-1">
+            {analogs.length} analog{analogs.length === 1 ? "" : "s"} matched
           </p>
         </div>
-        {evaluatedScenarios.length > 0 && (
-          <span className="text-xs font-semibold bg-accent/10 text-accent px-3 py-1.5 rounded-full">
-            {evaluatedScenarios.length} precedent{evaluatedScenarios.length === 1 ? "" : "s"} consulted
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${style.badge}`}>
+            {category}
           </span>
-        )}
-      </div>
-
-      {/* RAG summary bar */}
-      {ragSummary && (
-        <div className="flex flex-wrap items-center gap-4 mb-5 p-3 bg-secondary/40 rounded-lg border border-border text-xs text-muted-foreground">
-          <div className="flex items-center gap-1.5">
-            <Database size={13} className="text-accent" />
-            <span><span className="font-semibold text-foreground">{ragSummary.sec}</span> SEC 10-K sections indexed</span>
+          {open ? <ChevronUp size={14} className="text-muted-foreground" /> : <ChevronDown size={14} className="text-muted-foreground" />}
+        </div>
+      </button>
+      {open && (
+        <div className="px-5 pb-5">
+          <div className="p-3 bg-secondary/40 rounded-lg mb-3">
+            <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-1">Verified Analogs Used</p>
+            <div className="space-y-1.5">
+              {analogs.map((analog, analogIndex) => (
+                <p key={`${scenario.scenario_name}-${analogIndex}`} className="text-xs text-foreground font-medium">
+                  {analog}
+                </p>
+              ))}
+            </div>
           </div>
-          <div className="flex items-center gap-1.5">
-            <BookOpen size={13} className="text-accent" />
-            <span><span className="font-semibold text-foreground">{ragSummary.news}</span> news articles indexed</span>
-          </div>
-          {ragSummary.cache_hit && (
-            <div className="flex items-center gap-1.5">
-              <CheckCircle2 size={13} className="text-bull" />
-              <span className="text-bull font-medium">Cached result</span>
+          {analogContexts.length > 0 && (
+            <div className="space-y-2">
+              {analogContexts.map(({ analog, info }) => (
+                <div key={analog}>
+                  <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-1">
+                    Why it matches
+                  </p>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{info?.context}</p>
+                </div>
+              ))}
             </div>
           )}
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* Scenario cards or empty state */}
-      {evaluatedScenarios.length === 0 ? (
-        <div className="rounded-xl border border-border bg-secondary/30 p-6 text-center">
-          <p className="text-sm text-muted-foreground">
-            No historical scenario precedents were triggered for this analysis. The agents relied on current
-            SEC filings, market data, and news rather than macro-stress scenario analogs.
-          </p>
+function HistoricalAnalysisCard({
+  evaluatedScenarios,
+  showDetails,
+  onToggle,
+}: {
+  evaluatedScenarios: EvaluatedScenario[];
+  showDetails: boolean;
+  onToggle: () => void;
+}) {
+  const analogCount = countEvaluatedAnalogs(evaluatedScenarios);
+  const displayedScenarios = evaluatedScenarios.slice(0, 5);
+  const hiddenScenarioCount = Math.max(evaluatedScenarios.length - displayedScenarios.length, 0);
+
+  return (
+    <Card className="shadow-sm h-full">
+      <CardContent className="p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <ShieldCheck size={16} className="text-accent" />
+          <h4 className="text-lg font-semibold text-foreground">Historical Analysis</h4>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {evaluatedScenarios.map((s, i) => (
-            <ScenarioCard key={`${s.scenario_name}-${i}`} scenario={s} index={i} />
-          ))}
+        <p className="text-sm text-muted-foreground mb-5">
+          Historical analogs the AI used to stress-test the thesis for this run.
+        </p>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
+            <p className="text-3xl font-bold text-foreground tabular-nums">{analogCount}</p>
+            <p className="text-xs text-muted-foreground mt-1.5 font-medium">Historical Analogs</p>
+          </div>
+          <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
+            <p className="text-3xl font-bold text-foreground tabular-nums">{evaluatedScenarios.length}</p>
+            <p className="text-xs text-muted-foreground mt-1.5 font-medium">Scenario Buckets</p>
+          </div>
         </div>
-      )}
-    </section>
+        <button
+          onClick={onToggle}
+          className="mb-4 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ShieldCheck size={12} />
+          {showDetails ? "Hide" : "Show"} detailed historical analysis
+          {showDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        </button>
+        {showDetails && (
+          evaluatedScenarios.length === 0 ? (
+            <div className="rounded-xl border border-border bg-secondary/30 p-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                No historical scenario precedents were triggered for this analysis. The agents relied on current
+                SEC filings, market data, and news rather than macro-stress scenario analogs.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {displayedScenarios.map((s, i) => (
+                <ScenarioDropdown key={`${s.scenario_name}-${i}`} scenario={s} index={i} />
+              ))}
+              {hiddenScenarioCount > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Showing the top 5 scenario buckets for readability. {hiddenScenarioCount} additional scenario{hiddenScenarioCount === 1 ? "" : "s"} not shown.
+                </p>
+              )}
+            </div>
+          )
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -872,18 +896,12 @@ function WeightedScoresPanel({ evidence }: { evidence: EvidenceAssessment }) {
 
       <div className="space-y-3 mb-4">
         {agents.map((a) => {
-          const isWinner = a.key === evidence.winner;
           const barPct = maxWeighted > 0 ? (a.weighted / maxWeighted) * 100 : 0;
           return (
-            <div key={a.key} className={`rounded-lg p-3 ${isWinner ? "bg-accent/8 border border-accent/20" : "bg-secondary/40"}`}>
+            <div key={a.key} className="rounded-lg p-3 bg-secondary/40">
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-foreground">{a.label}</span>
-                  {isWinner && (
-                    <span className="text-xs font-semibold bg-accent text-white px-1.5 py-0.5 rounded-full">
-                      Winner
-                    </span>
-                  )}
                 </div>
                 <div className="text-right">
                   <span className={`text-base font-bold tabular-nums ${a.color}`}>
@@ -907,7 +925,6 @@ function WeightedScoresPanel({ evidence }: { evidence: EvidenceAssessment }) {
 
       {evidence.winner_reasoning && (
         <div className="text-xs text-muted-foreground leading-relaxed bg-secondary/40 rounded-lg p-3">
-          <span className="font-semibold text-foreground">Judge's rationale: </span>
           {evidence.winner_reasoning}
         </div>
       )}
@@ -1195,6 +1212,8 @@ const Results = () => {
   const navigate = useNavigate();
   const { analysisResult, formData } = useAnalysis();
   const [exporting, setExporting] = useState(false);
+  const [showHistoricalAnalysis, setShowHistoricalAnalysis] = useState(false);
+  const [showSourceLinks, setShowSourceLinks] = useState(false);
 
   const handleExportPdf = async () => {
     if (!analysisResult) return;
@@ -1229,6 +1248,7 @@ const Results = () => {
 
   const {
     ticker,
+    user_query,
     bull_analysis,
     bear_analysis,
     strategist_analysis,
@@ -1237,7 +1257,6 @@ const Results = () => {
     traffic_light,
     portfolio_exposure,
     sec_filing,
-    kelly_sizing,
     rag_summary,
     execution_time,
     timestamp,
@@ -1247,6 +1266,13 @@ const Results = () => {
 
   const evidence = final_recommendation.evidence_assessment ?? null;
   const proposedAmount = formData.amount ? parseFloat(formData.amount.replace(/,/g, "")) : 0;
+  const analysisQuestion = (
+    user_query?.trim()
+    || formData.userQuery?.trim()
+    || `Analyze ${ticker}`
+  );
+  const secSourceCount = rag_summary?.sec ?? rag_summary?.sec_docs ?? 0;
+  const newsSourceCount = rag_summary?.news ?? rag_summary?.news_docs ?? 0;
 
   const md = market_data as Record<string, unknown> | null;
   const companyName = md?.longName as string | undefined;
@@ -1259,6 +1285,17 @@ const Results = () => {
     name: k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
     value: v as number,
   }));
+  const secLinks = sec_filing
+    ? [
+        { label: "Item 1 - Business", url: sec_filing.section_urls.business },
+        { label: "Item 1A - Risk Factors", url: sec_filing.section_urls.risk_factors },
+        { label: "Item 7 - MD&A", url: sec_filing.section_urls.mda },
+        { label: "Item 8 - Financials", url: sec_filing.section_urls.financials },
+      ].filter((item) => Boolean(item.url))
+    : [];
+  const newsLinks = (Array.isArray(md?.recent_news) ? (md?.recent_news as MarketNewsItem[]) : [])
+    .filter((item) => Boolean(item?.title) && Boolean(item?.link))
+    .slice(0, 5);
 
   return (
     <div className="min-h-screen bg-background">
@@ -1327,6 +1364,12 @@ const Results = () => {
           </h3>
           <Card className="border-l-4 border-l-accent shadow-sm">
             <CardContent className="p-6">
+              <div className="mb-6 rounded-xl border border-border bg-card p-4">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2 font-medium">
+                  Question Asked
+                </p>
+                <p className="text-base text-foreground leading-relaxed">{analysisQuestion}</p>
+              </div>
               {/* Metric grid — result first */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6 bg-secondary/30 p-4 rounded-xl border border-border/50">
                 {[
@@ -1360,10 +1403,6 @@ const Results = () => {
                   </div>
                 ))}
               </div>
-
-              {/* Kelly Position Sizing */}
-              {kelly_sizing != null && <KellySizingInline ks={kelly_sizing} />}
-
               {/* Evidence-Weighted Decision Panel — always visible */}
               {evidence && <WeightedScoresPanel evidence={evidence} />}
             </CardContent>
@@ -1376,12 +1415,6 @@ const Results = () => {
             <TrafficLight trafficLight={traffic_light} />
           </div>
         )}
-
-        {/* ── §2 Scenario Analysis & Historical Precedents ───────────────────── */}
-        <ScenarioAnalysisSection
-          evaluatedScenarios={final_recommendation.evaluated_scenarios}
-          ragSummary={rag_summary}
-        />
 
         {/* ── §3 Investment Thesis (Bull Case) ──────────────────────────────── */}
         <section className="mb-12">
@@ -1429,6 +1462,111 @@ const Results = () => {
           )}
         </section>
 
+        {/* Historical Analysis + Data Log */}
+        {rag_summary && (
+          <div className="grid gap-6 mb-12 lg:grid-cols-2">
+            <HistoricalAnalysisCard
+              evaluatedScenarios={final_recommendation.evaluated_scenarios}
+              showDetails={showHistoricalAnalysis}
+              onToggle={() => setShowHistoricalAnalysis((v) => !v)}
+            />
+            <Card className="shadow-sm h-full">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <Database size={16} className="text-accent" />
+                  <h4 className="text-lg font-semibold text-foreground">Data Log</h4>
+                </div>
+                <p className="text-sm text-muted-foreground mb-5">
+                  All sources indexed and retrieved for this analysis run.
+                </p>
+                <div className="grid grid-cols-3 gap-4 mb-4">
+                  <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
+                    <p className="text-3xl font-bold text-foreground tabular-nums">{secSourceCount}</p>
+                    <p className="text-xs text-muted-foreground mt-1.5 font-medium">SEC 10-K Sections</p>
+                  </div>
+                  <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
+                    <p className="text-3xl font-bold text-foreground tabular-nums">{newsSourceCount}</p>
+                    <p className="text-xs text-muted-foreground mt-1.5 font-medium">News Articles</p>
+                  </div>
+                  <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
+                    <p className="text-3xl font-bold text-foreground tabular-nums">{countEvaluatedAnalogs(final_recommendation.evaluated_scenarios)}</p>
+                    <p className="text-xs text-muted-foreground mt-1.5 font-medium">Historical Analogs</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowSourceLinks((v) => !v)}
+                  className="mb-4 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Database size={12} />
+                  {showSourceLinks ? "Hide" : "Show"} detailed source links
+                  {showSourceLinks ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+                {showSourceLinks && (
+                  <div className="grid gap-4 xl:grid-cols-2 mb-4">
+                    <div className="rounded-xl border border-border bg-card p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                        SEC Source Links
+                      </p>
+                      {secLinks.length > 0 ? (
+                        <div className="space-y-2">
+                          {secLinks.map((item) => (
+                            <a
+                              key={item.label}
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center justify-between gap-3 rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm text-foreground hover:border-accent/40 hover:bg-secondary/50 transition-colors"
+                            >
+                              <span>{item.label}</span>
+                              <ExternalLink size={14} className="shrink-0 text-muted-foreground" />
+                            </a>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">SEC filing links are not available for this run.</p>
+                      )}
+                    </div>
+                    <div className="rounded-xl border border-border bg-card p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                        News Source Links
+                      </p>
+                      {newsLinks.length > 0 ? (
+                        <div className="space-y-2">
+                          {newsLinks.map((item, index) => (
+                            <a
+                              key={`${item.title}-${index}`}
+                              href={item.link}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-start justify-between gap-3 rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm text-foreground hover:border-accent/40 hover:bg-secondary/50 transition-colors"
+                            >
+                              <div className="min-w-0">
+                                <p>{item.title}</p>
+                                {item.publisher && (
+                                  <p className="text-xs text-muted-foreground mt-1">{item.publisher}</p>
+                                )}
+                              </div>
+                              <ExternalLink size={14} className="shrink-0 text-muted-foreground mt-0.5" />
+                            </a>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">News source links are not available for this run.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {rag_summary.cache_hit && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <CheckCircle2 size={12} className="text-bull" />
+                    Results served from cache — identical query run recently
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
         {/* ── Appendix ──────────────────────────────────────────────────────── */}
         <section className="mb-12 pt-8 border-t border-border">
           <h3 className="text-xl font-bold text-foreground mb-1">Appendix</h3>
@@ -1466,41 +1604,6 @@ const Results = () => {
 
           {/* Agent Roles */}
           <AgentRolesTab />
-
-          {/* Data Sources */}
-          {rag_summary && (
-            <Card className="shadow-sm mb-8">
-              <CardContent className="p-6">
-                <div className="flex items-center gap-2 mb-4">
-                  <Database size={16} className="text-accent" />
-                  <h4 className="text-lg font-semibold text-foreground">Data Sources</h4>
-                </div>
-                <p className="text-sm text-muted-foreground mb-5">
-                  All data sources indexed and retrieved for this analysis run.
-                </p>
-                <div className="grid grid-cols-3 gap-4 mb-4">
-                  <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
-                    <p className="text-3xl font-bold text-foreground tabular-nums">{rag_summary.sec}</p>
-                    <p className="text-xs text-muted-foreground mt-1.5 font-medium">SEC 10-K Sections</p>
-                  </div>
-                  <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
-                    <p className="text-3xl font-bold text-foreground tabular-nums">{rag_summary.news}</p>
-                    <p className="text-xs text-muted-foreground mt-1.5 font-medium">News Articles</p>
-                  </div>
-                  <div className="text-center p-4 bg-secondary/30 rounded-xl border border-border">
-                    <p className="text-3xl font-bold text-foreground tabular-nums">{final_recommendation.evaluated_scenarios.length}</p>
-                    <p className="text-xs text-muted-foreground mt-1.5 font-medium">Historical Analogs</p>
-                  </div>
-                </div>
-                {rag_summary.cache_hit && (
-                  <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-                    <CheckCircle2 size={12} className="text-bull" />
-                    Results served from cache — identical query run recently
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          )}
 
           {/* Methodology */}
           <Card className="shadow-sm mb-8">

@@ -172,7 +172,7 @@ def fetch_full_market_data(ticker: str) -> dict:
                     "shortName": profile.get("companyName"),
                     "current_price": _safe(quote.get("price") or profile.get("price")),
                     "previous_close": _safe(quote.get("previousClose")),
-                    "day_change_pct": _safe(quote.get("changePercentage")),
+                    "day_change_pct": _safe(quote.get("changePercentage") / 100) if quote.get("changePercentage") is not None else None,
                     "52_week_high": _safe(quote.get("yearHigh") or high_52),
                     "52_week_low": _safe(quote.get("yearLow") or low_52),
                     "market_cap": _safe(quote.get("marketCap") or profile.get("marketCap")),
@@ -453,7 +453,11 @@ def format_market_context(data: dict) -> str:
         lines.append(f"  Sector    {sector}")
         lines.append(f"  Industry  {industry}")
         if data.get("employees"):
-            lines.append(f"  Employees {data['employees']:,}")
+            emp = data['employees']
+            try:
+                lines.append(f"  Employees {int(emp):,}")
+            except (TypeError, ValueError):
+                lines.append(f"  Employees {emp}")
         if data.get("business_summary"):
             lines.append(f"  Business  {data['business_summary']}...")
 

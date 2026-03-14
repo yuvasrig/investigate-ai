@@ -97,10 +97,12 @@ def upsert_documents(ticker: str, documents: list[dict]) -> int:
 
     ids, texts, metadatas = [], [], []
     for i, doc in enumerate(documents):
+        m = doc["metadata"]
         uid = (
-            f"{ticker}_{doc['metadata']['source']}_"
-            f"{doc['metadata'].get('section', 'x')}_"
-            f"{doc['metadata'].get('chunk_index', i)}_{now}"
+            f"{ticker}_{m['source']}_"
+            f"{m.get('form', m.get('fiscal_year', 'x'))}_"
+            f"{m.get('section', 'x')}_"
+            f"{m.get('chunk_index', i)}"
         )
         ids.append(uid)
         texts.append(doc["text"])

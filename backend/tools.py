@@ -122,13 +122,15 @@ def fetch_full_market_data(ticker: str) -> dict:
     # ── Try FMP first if key is available ─────────────────────────────────────
     if _FMP_KEY:
         try:
-            profile  = _fmp_first(f"profile?symbol={ticker}")
-            quote    = _fmp_first(f"quote?symbol={ticker}")
-            ratios   = _fmp_first(f"ratios-ttm?symbol={ticker}")
-            km       = _fmp_first(f"key-metrics-ttm?symbol={ticker}")
-            est_list = _fmp_get(f"analyst-estimates?symbol={ticker}&period=annual&limit=1")
-            est      = est_list[0] if isinstance(est_list, list) and est_list else {}
-            inc_list = _fmp_get(f"income-statement?symbol={ticker}&period=quarter&limit=4")
+            profile   = _fmp_first(f"profile?symbol={ticker}")
+            quote     = _fmp_first(f"quote?symbol={ticker}")
+            ratios    = _fmp_first(f"ratios-ttm?symbol={ticker}")
+            km        = _fmp_first(f"key-metrics-ttm?symbol={ticker}")
+            est_list  = _fmp_get(f"analyst-estimates?symbol={ticker}&period=annual&limit=1")
+            est       = est_list[0] if isinstance(est_list, list) and est_list else {}
+            inc_list  = _fmp_get(f"income-statement?symbol={ticker}&period=quarter&limit=4")
+            pt_cons   = _fmp_first(f"price-target-consensus?symbol={ticker}")
+            pt_summ   = _fmp_first(f"price-target-summary?symbol={ticker}")
 
             if not profile and not quote:
                 pass  # fall through to yfinance
@@ -210,12 +212,14 @@ def fetch_full_market_data(ticker: str) -> dict:
                     "shares_outstanding": None,
 
                     # ── Analyst consensus ─────────────────────────────────────
-                    "analyst_mean_target": None,
-                    "analyst_median_target": None,
-                    "analyst_high_target": None,
-                    "analyst_low_target": None,
-                    "analyst_recommendation": None,
-                    "analyst_count": _safe(est.get("numAnalystsEps")),
+                    # Map to yfinance key names so agent prompts work unchanged
+                    "targetMeanPrice":   _safe(pt_cons.get("targetConsensus") or pt_summ.get("lastQuarterAvgPriceTarget")),
+                    "targetHighPrice":   _safe(pt_cons.get("targetHigh")),
+                    "targetLowPrice":    _safe(pt_cons.get("targetLow")),
+                    "targetMedianPrice": _safe(pt_cons.get("targetMedian")),
+                    "numberOfAnalystOpinions": _safe(pt_summ.get("lastQuarterCount") or est.get("numAnalystsEps")),
+                    "recommendationKey": profile.get("rating") or None,
+                    "analyst_count": _safe(pt_summ.get("lastQuarterCount") or est.get("numAnalystsEps")),
 
                     # ── Company profile ───────────────────────────────────────
                     "sector": profile.get("sector", "Unknown"),

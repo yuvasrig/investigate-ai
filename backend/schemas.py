@@ -39,20 +39,30 @@ class BullAnalysis(BaseModel):
     competitive_advantages: list[VerifiedClaim] = Field(description="Key competitive moats and advantages")
     growth_catalysts: list[VerifiedClaim] = Field(description="Key drivers of future growth")
     valuation_justification: str = Field(description="Why the current valuation is justified")
-    best_case_target: float = Field(description="Best case price target in USD")
+    best_case_target: float = Field(description="Best case price target in USD — must be an absolute stock price > 0")
     best_case_timeline: str = Field(description="Timeline for best case (e.g. '3 years')")
     confidence: int = Field(ge=0, le=10, description="Confidence score 0-10")
     pe_ratio: Optional[float] = Field(default=None, description="Estimated P/E ratio")
+
+    @field_validator("best_case_target", mode="before")
+    @classmethod
+    def parse_price_target(cls, v):
+        return _coerce_money_like_number(v)
 
 
 class BearAnalysis(BaseModel):
     competition_threats: list[VerifiedClaim] = Field(description="Key competitive threats and risks")
     valuation_concerns: str = Field(description="Summary of valuation concerns")
     cyclical_risks: list[VerifiedClaim] = Field(description="Cyclical, macro, and regulatory risks")
-    worst_case_target: float = Field(description="Worst case price target in USD")
+    worst_case_target: float = Field(description="Worst case price target in USD — must be an absolute stock price > 0")
     worst_case_timeline: str = Field(description="Timeline for worst case scenario")
     confidence: int = Field(ge=0, le=10, description="Confidence score 0-10")
     pe_ratio: Optional[float] = Field(default=None, description="Estimated P/E ratio")
+
+    @field_validator("worst_case_target", mode="before")
+    @classmethod
+    def parse_price_target(cls, v):
+        return _coerce_money_like_number(v)
 
 
 class StrategistAnalysis(BaseModel):

@@ -151,11 +151,26 @@ def compute_kelly_sizing(
     _corr_map = {"LOW": 0.40, "MODERATE": 0.60, "HIGH": 0.75, "VERY HIGH": 0.90}
     correlation = _corr_map.get(strategist_analysis.concentration_risk, 0.65)
 
+    bull_target = float(bull_analysis.best_case_target)
+    bear_target = float(bear_analysis.worst_case_target)
+
+    # Graceful fallback when LLM outputs invalid/zero targets:
+    # estimate ±(confidence/10 × 25%) from current price
+    if current_price > 0:
+        if bull_target <= current_price:
+            bull_target = current_price * (1 + bull_conv / 100 * 0.25)
+        if bear_target >= current_price:
+            bear_target = current_price * (1 - bear_conv / 100 * 0.25)
+
+    # If strategist recommends 0, use proposed_amount as cap
+    if strategist_cap <= 0:
+        strategist_cap = proposed_amount
+
     return kelly_position_size(
         bull_conviction=bull_conv,
         bear_conviction=bear_conv,
-        bull_target=float(bull_analysis.best_case_target),
-        bear_target=float(bear_analysis.worst_case_target),
+        bull_target=bull_target,
+        bear_target=bear_target,
         current_price=float(current_price),
         proposed_amount=proposed_amount,
         portfolio_value=portfolio_value,

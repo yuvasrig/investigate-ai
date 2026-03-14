@@ -6,10 +6,23 @@ format_market_context(data)    → str   — LLM-ready formatted block
 """
 
 import math
+import os
 from datetime import datetime
 from typing import Optional
 
+import requests
+import requests_cache
 import yfinance as yf
+
+# Cache yfinance HTTP calls for 1 hour — eliminates most Yahoo 429 errors
+requests_cache.install_cache(
+    "yfinance_cache",
+    backend="sqlite",
+    expire_after=3600,
+    allowable_codes=[200],
+)
+
+_FMP_KEY = os.getenv("FMP_API_KEY", "")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -70,6 +83,45 @@ def _safe(val):
     return val
 
 
+# ── FMP fallback ──────────────────────────────────────────────────────────────
+
+def _fetch_fmp(ticker: str) -> dict:
+    """
+    Fetch basic quote + profile from Financial Modeling Prep (free tier).
+    Returns {} if FMP_API_KEY is not set or the call fails.
+    Free tier: 250 calls/day, no CC required — sign up at financialmodelingprep.com
+    """
+    if not _FMP_KEY:
+        return {}
+    try:
+        base = "https://financialmodelingprep.com/api/v3"
+        profile = requests.get(f"{base}/profile/{ticker}?apikey={_FMP_KEY}", timeout=8).json()
+        quote   = requests.get(f"{base}/quote/{ticker}?apikey={_FMP_KEY}", timeout=8).json()
+
+        p = profile[0] if isinstance(profile, list) and profile else {}
+        q = quote[0]   if isinstance(quote,   list) and quote   else {}
+
+        return {
+            "longName":          p.get("companyName"),
+            "currentPrice":      q.get("price"),
+            "previousClose":     q.get("previousClose"),
+            "marketCap":         q.get("marketCap"),
+            "trailingPE":        q.get("pe"),
+            "beta":              p.get("beta"),
+            "fiftyTwoWeekHigh":  q.get("yearHigh"),
+            "fiftyTwoWeekLow":   q.get("yearLow"),
+            "dividendYield":     p.get("lastDiv"),
+            "sector":            p.get("sector"),
+            "industry":          p.get("industry"),
+            "country":           p.get("country"),
+            "website":           p.get("website"),
+            "business_summary":  (p.get("description") or "")[:400],
+            "_source":           "fmp",
+        }
+    except Exception:
+        return {}
+
+
 # ── Main data fetcher ─────────────────────────────────────────────────────────
 
 def fetch_full_market_data(ticker: str) -> dict:
@@ -92,13 +144,17 @@ def fetch_full_market_data(ticker: str) -> dict:
         stock = yf.Ticker(ticker)
         info = stock.info
 
-        # Guard: if yfinance returns an empty info dict, the ticker is invalid
-        if not info or not info.get("regularMarketPrice") and not info.get("currentPrice"):
-            return {
-                "ticker": ticker,
-                "error": f"No market data found for '{ticker}'. Check the ticker symbol.",
-                "fetched_at": now,
-            }
+        # Guard: if yfinance returns an empty/rate-limited response, try FMP
+        if not info or (not info.get("regularMarketPrice") and not info.get("currentPrice")):
+            fmp = _fetch_fmp(ticker)
+            if fmp:
+                info = fmp  # partial fallback — only covers display fields
+            else:
+                return {
+                    "ticker": ticker,
+                    "error": f"No market data found for '{ticker}'. Check the ticker symbol.",
+                    "fetched_at": now,
+                }
 
         data: dict = {
             "ticker": ticker,

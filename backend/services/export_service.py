@@ -333,14 +333,14 @@ def generate_pdf(analysis: dict) -> bytes:
     rag = analysis.get("rag_summary") or {}
     if rag:
         parts = []
+        if rag.get("fmp_docs"):
+            parts.append(f"FMP Financials: {rag['fmp_docs']} years")
         if rag.get("sec_docs"):
             parts.append(f"SEC 10-K: {rag['sec_docs']} chunks")
         if rag.get("news_docs"):
             parts.append(f"News: {rag['news_docs']} articles")
         if rag.get("analog_docs"):
             parts.append(f"Analogs: {rag['analog_docs']} scenarios")
-        if not parts and rag.get("total_docs"):
-            parts.append(f"{rag['total_docs']} grounding docs")
         if parts:
             pdf.set_font("Helvetica", "I", 7)
             pdf.set_text_color(*_MUTED_RGB)

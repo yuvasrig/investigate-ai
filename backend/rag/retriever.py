@@ -15,7 +15,7 @@ Usage:
 import concurrent.futures
 import os
 
-from rag.ingestion import SECIngester, NewsIngester
+from rag.ingestion import SECIngester, NewsIngester, FMPFinancialsIngester
 from rag import store
 from rag.historical_analogs import retrieve_analogs, ensure_analogs_seeded
 
@@ -66,16 +66,17 @@ def ingest_ticker(ticker: str, market_data: dict) -> dict:
     Returns a summary dict: {"sec": N, "news": M, "cache_hit": bool}
     """
     if not RAG_ENABLED:
-        return {"sec": 0, "news": 0, "cache_hit": False, "disabled": True}
+        return {"sec_docs": 0, "news_docs": 0, "fmp_docs": 0, "cache_hit": False, "disabled": True}
 
     # Always ensure analogs are seeded (idempotent)
     ensure_analogs_seeded()
 
     if store.is_fresh(ticker):
-        return {"sec": 0, "news": 0, "cache_hit": True}
+        return {"sec_docs": 0, "news_docs": 0, "fmp_docs": 0, "cache_hit": True}
 
     sec_count = 0
     news_count = 0
+    fmp_count = 0
 
     # SEC EDGAR — 10-K risk factors, business overview, MD&A
     try:
@@ -97,7 +98,16 @@ def ingest_ticker(ticker: str, market_data: dict) -> dict:
     except Exception:
         pass
 
-    return {"sec": sec_count, "news": news_count, "cache_hit": False}
+    # FMP annual financials — 4 years of audited income / balance sheet / CF
+    try:
+        fmp_ingester = FMPFinancialsIngester()
+        fmp_docs = fmp_ingester.fetch_documents(ticker)
+        if fmp_docs:
+            fmp_count = store.upsert_documents(ticker, fmp_docs)
+    except Exception:
+        pass
+
+    return {"sec_docs": sec_count, "news_docs": news_count, "fmp_docs": fmp_count, "cache_hit": False}
 
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
@@ -118,12 +128,20 @@ def retrieve_for_agent(ticker: str, role: str, n_results: int = 6) -> str:
 
     sec_results = [r for r in results if r["metadata"].get("source") == "sec_edgar"]
     news_results = [r for r in results if r["metadata"].get("source") == "news"]
+    fmp_results  = [r for r in results if r["metadata"].get("source") == "fmp_financials"]
 
     lines = [
         "=" * 60,
         f"  RETRIEVED DOCUMENTS — {ticker} ({role.upper()} agent)",
         "=" * 60,
     ]
+
+    if fmp_results:
+        lines.append("\nAUDITED FINANCIAL HISTORY (Financial Modeling Prep)")
+        for r in fmp_results:
+            fy = r["metadata"].get("fiscal_year", "")
+            lines.append(f"\n[FY{fy} Annual Financials  relevance: {r['score']:.2f}]")
+            lines.append(r["text"])
 
     if sec_results:
         lines.append("\nSEC FILING EXCERPTS")

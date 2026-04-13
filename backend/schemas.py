@@ -413,33 +413,3 @@ class PlaidExchangeRequest(BaseModel):
 
 class PlaidUserIdRequest(BaseModel):
     user_id: str = Field(default="anonymous", description="Your internal user ID")
-    ticker: str
-    alert_type: str
-    threshold: Optional[float]
-    message: Optional[str]
-    is_active: bool
-    created_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Tax harvesting schemas
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TaxHarvestRequest(BaseModel):
-    holdings: list[PortfolioHolding] = Field(description="Holdings with cost_basis for analysis")
-    tax_year: Optional[int] = Field(default=None, description="Tax year (defaults to current year)")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Plaid schemas
-# ══════════════════════════════════════════════════════════════════════════════
-
-class PlaidExchangeRequest(BaseModel):
-    public_token: str = Field(description="Short-lived public token from Plaid Link onSuccess")
-
-
-class PlaidUserIdRequest(BaseModel):
-    user_id: str = Field(default="anonymous", description="Your internal user ID")

@@ -63,8 +63,6 @@ class InvestmentState(TypedDict):
     # Gated grounding flag
     grounding_triggered: Optional[bool]
     
-    # Synchronization flag for parallel execution
-    sync_complete: Optional[bool]
 
 
 # ── Node 1 — Live market data ─────────────────────────────────────────────────
@@ -246,8 +244,6 @@ def strategist_node(state: InvestmentState) -> dict[str, Any]:
     )
     return {"strategist_analysis": strategist}
 
-# (Threadpool executor removed in favor of separate nodes)
-
 
 # ── Node 4 — Gated grounding (conditional) ───────────────────────────────────
 
@@ -363,24 +359,26 @@ def build_workflow() -> Any:
 
     graph.set_entry_point("fetch_data")
     graph.add_edge("fetch_data", "rag_ingest")
-    
-    # Fan out to parallel agent nodes
+
+    # Fan out: all three analysts run in parallel after data ingestion
     graph.add_edge("rag_ingest", "bull_node")
     graph.add_edge("rag_ingest", "bear_node")
     graph.add_edge("rag_ingest", "strategist_node")
-    
-    # Conditional logic requires waiting for all 3 agents to finish.
-    # We create a dummy synchronization node to easily collect the parallel states.
-    def sync_node(state: InvestmentState) -> dict[str, Any]:
-        return {"sync_complete": True}
-    
-    graph.add_node("sync", sync_node)
-    graph.add_edge("bull_node", "sync")
-    graph.add_edge("bear_node", "sync")
-    graph.add_edge("strategist_node", "sync")
-    
+
+    # Fan in: LangGraph waits for all three before entering post_analysis.
+    # post_analysis is a lightweight barrier node whose sole job is to be
+    # the source of the conditional routing edge — a required pattern in
+    # LangGraph when conditional logic depends on state from parallel branches.
+    def post_analysis(state: InvestmentState) -> dict[str, Any]:
+        return {}
+
+    graph.add_node("post_analysis", post_analysis)
+    graph.add_edge("bull_node", "post_analysis")
+    graph.add_edge("bear_node", "post_analysis")
+    graph.add_edge("strategist_node", "post_analysis")
+
     graph.add_conditional_edges(
-        "sync",
+        "post_analysis",
         route_after_analysis,
         {"verify_facts": "verify_facts", "judge": "judge"},
     )
